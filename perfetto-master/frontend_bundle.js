@@ -931,11 +931,13 @@ var perfetto = (function () {
 	            }
 	            title = cropText(title, charWidth, rectWidth);
 	            subTitle = cropText(subTitle, charWidth, rectWidth);
+	            const rectXCenter = rectStart + rectWidth / 2;
 	            ctx.fillStyle = '#fff';
 	            ctx.font = '12px Google Sans';
-	            // ctx.fillText(title, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 - 3);
+	            ctx.fillText(title, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 - 3);
 	            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
 	            ctx.font = '10px Google Sans';
+	            ctx.fillText(subTitle, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 + 11);
 	        }
 	        const hoveredThread = globals.globals.threads.get(this.hoveredUtid);
 	        if (hoveredThread !== undefined) {
@@ -11204,7 +11206,7 @@ var perfetto = (function () {
 	    view() {
 	        return [
 	            mithril('header', 'Flame Graph'),
-	            mithril('embed.flame-graph-panel', { type: 'image/svg+xml', src: '/assets/flamegraph.svg' })
+	            mithril('embed.flame-graph-panel', { type: 'image/svg+xml', src: 'assets/flamegraph.svg' })
 	        ];
 	    }
 	}
