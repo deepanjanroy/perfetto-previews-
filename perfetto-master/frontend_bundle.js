@@ -11055,7 +11055,7 @@ var perfetto = (function () {
 
 	exports.HomePage = pages.createPage({
 	    view() {
-	        return mithril('.page.home-page', mithril('.home-page-title', 'Perfetto'), mithril('img.logo[src=/assets/logo-3d.png]'));
+	        return mithril('.page.home-page', mithril('.home-page-title', 'Perfetto'), mithril('img.logo[src=assets/logo-3d.png]'));
 	    },
 	});
 
