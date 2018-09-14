@@ -28860,7 +28860,7 @@ m.route(root, "/", {
   },
 });
 
-TheTraceStore.loadFromUrl('/examples/trace.protobuf').then(() => {
+TheTraceStore.loadFromUrl('examples/trace.protobuf').then(() => {
   if (TheTraceStore.traces.length === 0) return;
 
   const trace = TheTraceStore.traces[TheTraceStore.traces.length - 1];
