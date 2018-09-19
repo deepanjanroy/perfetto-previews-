@@ -524,15 +524,7 @@ header {
   border: 1px solid rgba(69, 187, 73, 0.5);
   pointer-events: none; }
 
-.container-perf-pane {
-  position: absolute;
-  top: 5px;
-  left: 5px;
-  width: 300px;
-  height: 200px;
-  background-color: rgba(171, 190, 227, 0.8); }
-
-.perf-monitor {
+.perf-stats-display {
   --stroke-color: hsl(217, 39%, 94%);
   position: fixed;
   width: 600px;
@@ -542,20 +534,20 @@ header {
   font-family: monospace;
   padding: 10px;
   z-index: 100; }
-  .perf-monitor div {
+  .perf-stats-display div {
     margin: 2px 0px; }
-  .perf-monitor button {
+  .perf-stats-display button {
     color: orange;
     text-decoration: underline; }
-    .perf-monitor button:hover {
+    .perf-stats-display button:hover {
       color: red; }
-  .perf-monitor table, .perf-monitor td, .perf-monitor th {
+  .perf-stats-display table, .perf-stats-display td, .perf-stats-display th {
     border: 1px solid var(--stroke-color);
     text-align: center;
     padding: 4px;
     margin: 4px 0px; }
-  .perf-monitor table {
+  .perf-stats-display table {
     border-collapse: collapse; }
-  .perf-monitor > section {
+  .perf-stats-display > section {
     padding: 5px;
     border-bottom: 1px solid var(--stroke-color); }

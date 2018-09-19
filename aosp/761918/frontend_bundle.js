@@ -1801,7 +1801,7 @@ var perfetto = (function () {
 	        ]);
 	    }
 	    getPerfDisplayEl() {
-	        return document.querySelector('.perf-monitor');
+	        return document.querySelector('.perf-stats-display');
 	    }
 	}
 	exports.perfDisplay = new PerfDisplay();
@@ -11280,6 +11280,12 @@ limit 20;`;
 	        return mithril('.alerts', renderPermalink());
 	    },
 	};
+	const PerfStatsDisplay = {
+	    view() {
+	        return globals.globals.frontendLocalState.perfDebug ? mithril('.perf-stats-display') :
+	            null;
+	    }
+	};
 	/**
 	 * Wrap component with common UI elements (nav bar etc).
 	 */
@@ -11291,7 +11297,7 @@ limit 20;`;
 	                mithril(topbar.Topbar),
 	                mithril(component),
 	                mithril(Alerts),
-	                mithril('.perf-monitor'),
+	                mithril(PerfStatsDisplay),
 	            ];
 	        },
 	    };
