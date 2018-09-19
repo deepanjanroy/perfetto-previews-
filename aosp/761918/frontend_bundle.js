@@ -1801,7 +1801,7 @@ var perfetto = (function () {
 	        ]);
 	    }
 	    getPerfDisplayEl() {
-	        return document.querySelector('.perf-stats-display');
+	        return document.querySelector('.perf-stats-content');
 	    }
 	}
 	exports.perfDisplay = new PerfDisplay();
@@ -11223,15 +11223,6 @@ limit 20;`;
 	        return mithril(`.omnibox${commandMode ? '.command-mode' : ''}`, mithril(`input[placeholder=${placeholder[mode]}]`), mithril('.omnibox-results', results));
 	    },
 	};
-	const TogglePerfDebugButton = {
-	    view() {
-	        return mithril('.perf-monitor-button', mithril('button', {
-	            onclick: () => globals.globals.frontendLocalState.togglePerfDebug(),
-	        }, mithril('i.material-icons', {
-	            title: 'Toggle Perf Debug Mode',
-	        }, 'assessment')));
-	    }
-	};
 	exports.Topbar = {
 	    view() {
 	        const progBar = [];
@@ -11240,7 +11231,7 @@ limit 20;`;
 	            (engine !== undefined && !engine.ready)) {
 	            progBar.push(mithril('.progress'));
 	        }
-	        return mithril('.topbar', mithril(TogglePerfDebugButton), mithril(Omnibox), ...progBar);
+	        return mithril('.topbar', mithril(Omnibox), ...progBar);
 	    },
 	};
 
@@ -11280,10 +11271,23 @@ limit 20;`;
 	        return mithril('.alerts', renderPermalink());
 	    },
 	};
-	const PerfStatsDisplay = {
+	const TogglePerfDebugButton = {
 	    view() {
-	        return globals.globals.frontendLocalState.perfDebug ? mithril('.perf-stats-display') :
-	            null;
+	        return mithril('.perf-monitor-button', mithril('button', {
+	            onclick: () => globals.globals.frontendLocalState.togglePerfDebug(),
+	        }, mithril('i.material-icons', {
+	            title: 'Toggle Perf Debug Mode',
+	        }, 'assessment')));
+	    }
+	};
+	const PerfStats = {
+	    view() {
+	        const perfDebug = globals.globals.frontendLocalState.perfDebug;
+	        const children = [mithril(TogglePerfDebugButton)];
+	        if (perfDebug) {
+	            children.unshift(mithril('.perf-stats-content'));
+	        }
+	        return mithril(`.perf-stats[expanded=${perfDebug}]`, children);
 	    }
 	};
 	/**
@@ -11297,7 +11301,7 @@ limit 20;`;
 	                mithril(topbar.Topbar),
 	                mithril(component),
 	                mithril(Alerts),
-	                mithril(PerfStatsDisplay),
+	                mithril(PerfStats),
 	            ];
 	        },
 	    };
