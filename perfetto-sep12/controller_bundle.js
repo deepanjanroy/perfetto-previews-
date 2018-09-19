@@ -140,6 +140,13 @@ var perfetto = (function () {
 	    };
 	}
 	exports.moveTrack = moveTrack;
+	function toggleTrackPinned(trackId) {
+	    return {
+	        type: 'TOGGLE_TRACK_PINNED',
+	        trackId,
+	    };
+	}
+	exports.toggleTrackPinned = toggleTrackPinned;
 	function setEngineReady(engineId, ready = true) {
 	    return { type: 'SET_ENGINE_READY', engineId, ready };
 	}
@@ -199,14 +206,15 @@ var perfetto = (function () {
 	var actions_8 = actions.deleteQuery;
 	var actions_9 = actions.navigate;
 	var actions_10 = actions.moveTrack;
-	var actions_11 = actions.setEngineReady;
-	var actions_12 = actions.createPermalink;
-	var actions_13 = actions.setPermalink;
-	var actions_14 = actions.loadPermalink;
-	var actions_15 = actions.setState;
-	var actions_16 = actions.setTraceTime;
-	var actions_17 = actions.setVisibleTraceTime;
-	var actions_18 = actions.updateStatus;
+	var actions_11 = actions.toggleTrackPinned;
+	var actions_12 = actions.setEngineReady;
+	var actions_13 = actions.createPermalink;
+	var actions_14 = actions.setPermalink;
+	var actions_15 = actions.loadPermalink;
+	var actions_16 = actions.setState;
+	var actions_17 = actions.setTraceTime;
+	var actions_18 = actions.setVisibleTraceTime;
+	var actions_19 = actions.updateStatus;
 
 	var registry = createCommonjsModule(function (module, exports) {
 	// Copyright (C) 2018 The Android Open Source Project
@@ -582,7 +590,8 @@ var perfetto = (function () {
 	        traceTime: { startSec: 0, endSec: 10, lastUpdate: 0 },
 	        visibleTraceTime: { startSec: 0, endSec: 10, lastUpdate: 0 },
 	        tracks: {},
-	        displayedTrackIds: [],
+	        pinnedTracks: [],
+	        scrollingTracks: [],
 	        queries: {},
 	        permalink: {},
 	        status: { msg: '', timestamp: 0 },
@@ -643,6 +652,7 @@ var perfetto = (function () {
 	        case 'ADD_TRACK': {
 	            const nextState = Object.assign({}, state$$1);
 	            nextState.tracks = Object.assign({}, state$$1.tracks);
+	            nextState.scrollingTracks = [...state$$1.scrollingTracks];
 	            const id = `${nextState.nextId++}`;
 	            nextState.tracks[id] = {
 	                id,
@@ -652,7 +662,7 @@ var perfetto = (function () {
 	                maxDepth: 1,
 	                cpu: action.cpu,
 	            };
-	            nextState.displayedTrackIds.push(id);
+	            nextState.scrollingTracks.push(id);
 	            return nextState;
 	        }
 	        case 'REQ_TRACK_DATA': {
@@ -687,7 +697,7 @@ var perfetto = (function () {
 	                upid: action.upid,
 	                utid: action.utid,
 	            };
-	            nextState.displayedTrackIds.push(id);
+	            nextState.scrollingTracks.push(id);
 	            return nextState;
 	        }
 	        case 'EXECUTE_QUERY': {
@@ -706,24 +716,58 @@ var perfetto = (function () {
 	            delete nextState.queries[action.queryId];
 	            return nextState;
 	        }
-	        case 'MOVE_TRACK':
-	            if (!state$$1.displayedTrackIds.includes(action.trackId) ||
-	                !action.direction) {
-	                throw new Error('Trying to move a track that does not exist' +
-	                    ' or not providing a direction to move to.');
+	        case 'MOVE_TRACK': {
+	            if (!action.direction) {
+	                throw new Error('No direction given');
 	            }
-	            const nextState = Object.assign({}, state$$1); // Creates a shallow copy.
-	            // Copy the displayedTrackIds to prevent side effects.
-	            nextState.displayedTrackIds = state$$1.displayedTrackIds.slice();
-	            const oldIndex = state$$1.displayedTrackIds.indexOf(action.trackId);
+	            const id = action.trackId;
+	            const isPinned = state$$1.pinnedTracks.includes(id);
+	            const isScrolling = state$$1.scrollingTracks.includes(id);
+	            if (!isScrolling && !isPinned) {
+	                throw new Error(`No track with id ${id}`);
+	            }
+	            const nextState = Object.assign({}, state$$1);
+	            const scrollingTracks = nextState.scrollingTracks =
+	                state$$1.scrollingTracks.slice();
+	            const pinnedTracks = nextState.pinnedTracks = state$$1.pinnedTracks.slice();
+	            const tracks = isPinned ? pinnedTracks : scrollingTracks;
+	            const oldIndex = tracks.indexOf(id);
 	            const newIndex = action.direction === 'up' ? oldIndex - 1 : oldIndex + 1;
-	            const swappedTrackId = state$$1.displayedTrackIds[newIndex];
-	            if (!swappedTrackId) {
-	                break;
+	            const swappedTrackId = tracks[newIndex];
+	            if (isPinned && newIndex === pinnedTracks.length) {
+	                // Move from last element of pinned to first element of scrolling.
+	                scrollingTracks.unshift(pinnedTracks.pop());
 	            }
-	            nextState.displayedTrackIds[newIndex] = action.trackId;
-	            nextState.displayedTrackIds[oldIndex] = swappedTrackId;
+	            else if (isScrolling && newIndex === -1) {
+	                // Move first element of scrolling to last element of pinned.
+	                pinnedTracks.push(scrollingTracks.shift());
+	            }
+	            else if (swappedTrackId) {
+	                tracks[newIndex] = id;
+	                tracks[oldIndex] = swappedTrackId;
+	            }
+	            else {
+	                return state$$1;
+	            }
 	            return nextState;
+	        }
+	        case 'TOGGLE_TRACK_PINNED': {
+	            const id = action.trackId;
+	            const isPinned = state$$1.pinnedTracks.includes(id);
+	            const nextState = Object.assign({}, state$$1);
+	            const pinnedTracks = nextState.pinnedTracks = [...state$$1.pinnedTracks];
+	            const scrollingTracks = nextState.scrollingTracks =
+	                [...state$$1.scrollingTracks];
+	            if (isPinned) {
+	                pinnedTracks.splice(pinnedTracks.indexOf(id), 1);
+	                scrollingTracks.unshift(id);
+	            }
+	            else {
+	                scrollingTracks.splice(scrollingTracks.indexOf(id), 1);
+	                pinnedTracks.push(id);
+	            }
+	            return nextState;
+	        }
 	        case 'SET_ENGINE_READY': {
 	            const nextState = Object.assign({}, state$$1); // Creates a shallow copy.
 	            nextState.engines = Object.assign({}, state$$1.engines);
@@ -9078,6 +9122,7 @@ var perfetto = (function () {
 	            `and ts_lower_bound = ${Math.round(start * 1e9)} ` +
 	            `and ts <= ${Math.round(end * 1e9)} ` +
 	            `and dur >= ${Math.round(resolution * 1e9)} ` +
+	            `and utid != 0 ` +
 	            `order by ts ` +
 	            `limit ${LIMIT};`;
 	        if (this.trackState.cpu === 0)
@@ -9853,7 +9898,7 @@ var perfetto = (function () {
 	                // Sched overview.
 	                const schedRows = yield engine.rawQuery({
 	                    sqlQuery: `select sum(dur)/${stepSec}/1e9, cpu from sched ` +
-	                        `where ts >= ${startNs} and ts < ${endNs} ` +
+	                        `where ts >= ${startNs} and ts < ${endNs} and utid != 0 ` +
 	                        'group by cpu order by cpu'
 	                });
 	                const schedData = {};

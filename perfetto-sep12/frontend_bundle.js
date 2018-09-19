@@ -70,7 +70,8 @@ var perfetto = (function () {
 	        traceTime: { startSec: 0, endSec: 10, lastUpdate: 0 },
 	        visibleTraceTime: { startSec: 0, endSec: 10, lastUpdate: 0 },
 	        tracks: {},
-	        displayedTrackIds: [],
+	        pinnedTracks: [],
+	        scrollingTracks: [],
 	        queries: {},
 	        permalink: {},
 	        status: { msg: '', timestamp: 0 },
@@ -176,6 +177,13 @@ var perfetto = (function () {
 	    };
 	}
 	exports.moveTrack = moveTrack;
+	function toggleTrackPinned(trackId) {
+	    return {
+	        type: 'TOGGLE_TRACK_PINNED',
+	        trackId,
+	    };
+	}
+	exports.toggleTrackPinned = toggleTrackPinned;
 	function setEngineReady(engineId, ready = true) {
 	    return { type: 'SET_ENGINE_READY', engineId, ready };
 	}
@@ -235,14 +243,15 @@ var perfetto = (function () {
 	var actions_8 = actions.deleteQuery;
 	var actions_9 = actions.navigate;
 	var actions_10 = actions.moveTrack;
-	var actions_11 = actions.setEngineReady;
-	var actions_12 = actions.createPermalink;
-	var actions_13 = actions.setPermalink;
-	var actions_14 = actions.loadPermalink;
-	var actions_15 = actions.setState;
-	var actions_16 = actions.setTraceTime;
-	var actions_17 = actions.setVisibleTraceTime;
-	var actions_18 = actions.updateStatus;
+	var actions_11 = actions.toggleTrackPinned;
+	var actions_12 = actions.setEngineReady;
+	var actions_13 = actions.createPermalink;
+	var actions_14 = actions.setPermalink;
+	var actions_15 = actions.loadPermalink;
+	var actions_16 = actions.setState;
+	var actions_17 = actions.setTraceTime;
+	var actions_18 = actions.setVisibleTraceTime;
+	var actions_19 = actions.updateStatus;
 
 	var time = createCommonjsModule(function (module, exports) {
 	// Copyright (C) 2018 The Android Open Source Project
@@ -386,6 +395,7 @@ var perfetto = (function () {
 	        this.visibleWindowTime = new time.TimeSpan(0, 10);
 	        this.timeScale = new time_scale.TimeScale(this.visibleWindowTime, [0, 0]);
 	        this._visibleTimeLastUpdate = 0;
+	        this.perfDebug = false;
 	    }
 	    // TODO: there is some redundancy in the fact that both |visibleWindowTime|
 	    // and a |timeScale| have a notion of time range. That should live in one
@@ -410,6 +420,10 @@ var perfetto = (function () {
 	    get visibleTimeLastUpdate() {
 	        return this._visibleTimeLastUpdate;
 	    }
+	    togglePerfDebug() {
+	        this.perfDebug = !this.perfDebug;
+	        globals.globals.rafScheduler.scheduleFullRedraw();
+	    }
 	}
 	exports.FrontendLocalState = FrontendLocalState;
 
@@ -417,795 +431,6 @@ var perfetto = (function () {
 
 	unwrapExports(frontend_local_state);
 	var frontend_local_state_1 = frontend_local_state.FrontendLocalState;
-
-	var raf_scheduler = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	// This class orchestrates all RAFs in the UI. It ensures that there is only
-	// one animation frame handler overall and that callbacks are called in
-	// predictable order. There are two types of callbacks here:
-	// - actions (e.g. pan/zoon animations), which will alter the "fast"
-	//  (main-thread-only) state (e.g. update visible time bounds @ 60 fps).
-	// - redraw callbacks that will repaint canvases.
-	// This class guarantees that, on each frame, redraw callbacks are called after
-	// all action callbacks.
-	class RafScheduler {
-	    constructor() {
-	        this.actionCallbacks = new Set();
-	        this.canvasRedrawCallbacks = new Set();
-	        this._syncDomRedraw = _ => { };
-	        this.hasScheduledNextFrame = false;
-	        this.requestedFullRedraw = false;
-	        this.isRedrawing = false;
-	    }
-	    start(cb) {
-	        this.actionCallbacks.add(cb);
-	        this.maybeScheduleAnimationFrame();
-	    }
-	    stop(cb) {
-	        this.actionCallbacks.delete(cb);
-	    }
-	    addRedrawCallback(cb) {
-	        this.canvasRedrawCallbacks.add(cb);
-	    }
-	    removeRedrawCallback(cb) {
-	        this.canvasRedrawCallbacks.delete(cb);
-	    }
-	    scheduleRedraw() {
-	        this.maybeScheduleAnimationFrame(true);
-	    }
-	    set domRedraw(cb) {
-	        this._syncDomRedraw = cb || (_ => { });
-	    }
-	    scheduleFullRedraw() {
-	        this.requestedFullRedraw = true;
-	        this.maybeScheduleAnimationFrame(true);
-	    }
-	    syncCanvasRedraw(nowMs) {
-	        if (this.isRedrawing)
-	            return;
-	        this.isRedrawing = true;
-	        for (const redraw of this.canvasRedrawCallbacks)
-	            redraw(nowMs);
-	        this.isRedrawing = false;
-	    }
-	    maybeScheduleAnimationFrame(force = false) {
-	        if (this.hasScheduledNextFrame)
-	            return;
-	        if (this.actionCallbacks.size !== 0 || force) {
-	            this.hasScheduledNextFrame = true;
-	            window.requestAnimationFrame(this.onAnimationFrame.bind(this));
-	        }
-	    }
-	    onAnimationFrame(nowMs) {
-	        this.hasScheduledNextFrame = false;
-	        const doFullRedraw = this.requestedFullRedraw;
-	        this.requestedFullRedraw = false;
-	        for (const action of this.actionCallbacks)
-	            action(nowMs);
-	        if (doFullRedraw)
-	            this._syncDomRedraw(nowMs);
-	        this.syncCanvasRedraw(nowMs);
-	        this.maybeScheduleAnimationFrame();
-	    }
-	}
-	exports.RafScheduler = RafScheduler;
-
-	});
-
-	unwrapExports(raf_scheduler);
-	var raf_scheduler_1 = raf_scheduler.RafScheduler;
-
-	var globals = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-
-
-
-
-	/**
-	 * Global accessors for state/dispatch in the frontend.
-	 */
-	class Globals {
-	    constructor() {
-	        this._dispatch = undefined;
-	        this._state = undefined;
-	        this._trackDataStore = undefined;
-	        this._queryResults = undefined;
-	        this._frontendLocalState = undefined;
-	        this._rafScheduler = undefined;
-	        this._overviewStore = undefined;
-	        this._threadMap = undefined;
-	    }
-	    initialize(dispatch) {
-	        this._dispatch = dispatch;
-	        this._state = state.createEmptyState();
-	        this._trackDataStore = new Map();
-	        this._queryResults = new Map();
-	        this._frontendLocalState = new frontend_local_state.FrontendLocalState();
-	        this._rafScheduler = new raf_scheduler.RafScheduler();
-	        this._overviewStore = new Map();
-	        this._threadMap = new Map();
-	    }
-	    get state() {
-	        return logging.assertExists(this._state);
-	    }
-	    set state(state$$1) {
-	        this._state = logging.assertExists(state$$1);
-	    }
-	    get dispatch() {
-	        return logging.assertExists(this._dispatch);
-	    }
-	    get overviewStore() {
-	        return logging.assertExists(this._overviewStore);
-	    }
-	    get trackDataStore() {
-	        return logging.assertExists(this._trackDataStore);
-	    }
-	    get queryResults() {
-	        return logging.assertExists(this._queryResults);
-	    }
-	    get frontendLocalState() {
-	        return logging.assertExists(this._frontendLocalState);
-	    }
-	    get rafScheduler() {
-	        return logging.assertExists(this._rafScheduler);
-	    }
-	    get threads() {
-	        return logging.assertExists(this._threadMap);
-	    }
-	    resetForTesting() {
-	        this._dispatch = undefined;
-	        this._state = undefined;
-	        this._trackDataStore = undefined;
-	        this._queryResults = undefined;
-	        this._frontendLocalState = undefined;
-	        this._rafScheduler = undefined;
-	        this._overviewStore = undefined;
-	    }
-	}
-	exports.globals = new Globals();
-
-	});
-
-	unwrapExports(globals);
-	var globals_1 = globals.globals;
-
-	var track = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	/**
-	 * The abstract class that needs to be implemented by all tracks.
-	 */
-	class Track {
-	    /**
-	     * Receive data published by the TrackController of this track.
-	     */
-	    constructor(trackState) {
-	        this.trackState = trackState;
-	    }
-	    getHeight() {
-	        return 40;
-	    }
-	    onMouseMove(_position) { }
-	    onMouseOut() { }
-	}
-	exports.Track = Track;
-
-	});
-
-	unwrapExports(track);
-	var track_1 = track.Track;
-
-	var registry = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	class Registry {
-	    constructor() {
-	        this.registry = new Map();
-	    }
-	    register(registrant) {
-	        const kind = registrant.kind;
-	        if (this.registry.has(kind)) {
-	            throw new Error(`Registrant ${kind} already exists in the registry`);
-	        }
-	        this.registry.set(kind, registrant);
-	    }
-	    has(kind) {
-	        return this.registry.has(kind);
-	    }
-	    get(kind) {
-	        const registrant = this.registry.get(kind);
-	        if (registrant === undefined) {
-	            throw new Error(`${kind} has not been registered.`);
-	        }
-	        return registrant;
-	    }
-	    unregisterAllForTesting() {
-	        this.registry.clear();
-	    }
-	}
-	exports.Registry = Registry;
-
-	});
-
-	unwrapExports(registry);
-	var registry_1 = registry.Registry;
-
-	var track_registry = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-
-	/**
-	 * Global registry that maps types to TrackCreator.
-	 */
-	exports.trackRegistry = new registry.Registry();
-
-	});
-
-	unwrapExports(track_registry);
-	var track_registry_1 = track_registry.trackRegistry;
-
-	var common = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	exports.CPU_COUNTER_TRACK_KIND = 'CpuCounterTrack';
-
-	});
-
-	unwrapExports(common);
-	var common_1 = common.CPU_COUNTER_TRACK_KIND;
-
-	var frontend = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-
-
-
-
-	/**
-	 * Demo track as so we can at least have two kinds of tracks.
-	 */
-	class CpuCounterTrack extends track.Track {
-	    constructor(trackState) {
-	        super(trackState);
-	    }
-	    static create(trackState) {
-	        return new CpuCounterTrack(trackState);
-	    }
-	    // No-op
-	    consumeData() { }
-	    renderCanvas(ctx) {
-	        const { timeScale, visibleWindowTime } = globals.globals.frontendLocalState;
-	        // It is possible to get width of track from visibleWindowMs.
-	        const visibleStartPx = timeScale.timeToPx(visibleWindowTime.start);
-	        const visibleEndPx = timeScale.timeToPx(visibleWindowTime.end);
-	        const visibleWidthPx = visibleEndPx - visibleStartPx;
-	        ctx.fillStyle = '#eee';
-	        ctx.fillRect(Math.round(0.25 * visibleWidthPx), 0, Math.round(0.5 * visibleWidthPx), this.getHeight());
-	        ctx.font = '16px Arial';
-	        ctx.fillStyle = '#000';
-	        ctx.fillText('Drawing ' + CpuCounterTrack.kind, Math.round(0.4 * visibleWidthPx), 20);
-	    }
-	}
-	CpuCounterTrack.kind = common.CPU_COUNTER_TRACK_KIND;
-	track_registry.trackRegistry.register(CpuCounterTrack);
-
-	});
-
-	unwrapExports(frontend);
-
-	var common$2 = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	exports.CPU_SLICE_TRACK_KIND = 'CpuSliceTrack';
-
-	});
-
-	unwrapExports(common$2);
-	var common_1$1 = common$2.CPU_SLICE_TRACK_KIND;
-
-	var frontend$2 = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-
-
-
-
-
-
-	const MARGIN_TOP = 5;
-	const RECT_HEIGHT = 30;
-	function cropText(str, charWidth, rectWidth) {
-	    const maxTextWidth = rectWidth - 4;
-	    let displayText = '';
-	    const nameLength = str.length * charWidth;
-	    if (nameLength < maxTextWidth) {
-	        displayText = str;
-	    }
-	    else {
-	        // -3 for the 3 ellipsis.
-	        const displayedChars = Math.floor(maxTextWidth / charWidth) - 3;
-	        if (displayedChars > 3) {
-	            displayText = str.substring(0, displayedChars) + '...';
-	        }
-	    }
-	    return displayText;
-	}
-	function getCurResolution() {
-	    // Truncate the resolution to the closest power of 10.
-	    const resolution = globals.globals.frontendLocalState.timeScale.deltaPxToDuration(1);
-	    return Math.pow(10, Math.floor(Math.log10(resolution)));
-	}
-	class CpuSliceTrack extends track.Track {
-	    constructor(trackState) {
-	        super(trackState);
-	        this.hoveredUtid = -1;
-	        this.reqPending = false;
-	    }
-	    static create(trackState) {
-	        return new CpuSliceTrack(trackState);
-	    }
-	    reqDataDeferred() {
-	        const { visibleWindowTime } = globals.globals.frontendLocalState;
-	        const reqStart = visibleWindowTime.start - visibleWindowTime.duration;
-	        const reqEnd = visibleWindowTime.end + visibleWindowTime.duration;
-	        const reqRes = getCurResolution();
-	        this.reqPending = false;
-	        globals.globals.dispatch(actions.requestTrackData(this.trackState.id, reqStart, reqEnd, reqRes));
-	    }
-	    renderCanvas(ctx) {
-	        // TODO: fonts and colors should come from the CSS and not hardcoded here.
-	        const { timeScale, visibleWindowTime } = globals.globals.frontendLocalState;
-	        const trackData = this.trackData;
-	        // If there aren't enough cached slices data in |trackData| request more to
-	        // the controller.
-	        const inRange = trackData !== undefined &&
-	            (visibleWindowTime.start >= trackData.start &&
-	                visibleWindowTime.end <= trackData.end);
-	        if (!inRange || trackData.resolution > getCurResolution()) {
-	            if (!this.reqPending) {
-	                this.reqPending = true;
-	                setTimeout(() => this.reqDataDeferred(), 50);
-	            }
-	            if (trackData === undefined)
-	                return; // Can't possibly draw anything.
-	        }
-	        ctx.textAlign = 'center';
-	        ctx.font = '12px Google Sans';
-	        const charWidth = ctx.measureText('dbpqaouk').width / 8;
-	        // TODO: this needs to be kept in sync with the hue generation algorithm
-	        // of overview_timeline_panel.ts
-	        const hue = (128 + (32 * this.trackState.cpu)) % 256;
-	        // If the cached trace slices don't fully cover the visible time range,
-	        // show a gray rectangle with a "Loading..." label.
-	        ctx.font = '12px Google Sans';
-	        if (trackData.start > visibleWindowTime.start) {
-	            const rectWidth = timeScale.timeToPx(Math.min(trackData.start, visibleWindowTime.end));
-	            ctx.fillStyle = '#eee';
-	            ctx.fillRect(0, MARGIN_TOP, rectWidth, RECT_HEIGHT);
-	            ctx.fillStyle = '#666';
-	            ctx.fillText('loading...', rectWidth / 2, MARGIN_TOP + RECT_HEIGHT / 2, rectWidth);
-	        }
-	        if (trackData.end < visibleWindowTime.end) {
-	            const rectX = timeScale.timeToPx(Math.max(trackData.end, visibleWindowTime.start));
-	            const rectWidth = timeScale.timeToPx(visibleWindowTime.end) - rectX;
-	            ctx.fillStyle = '#eee';
-	            ctx.fillRect(rectX, MARGIN_TOP, rectWidth, RECT_HEIGHT);
-	            ctx.fillStyle = '#666';
-	            ctx.fillText('loading...', rectX + rectWidth / 2, MARGIN_TOP + RECT_HEIGHT / 2, rectWidth);
-	        }
-	        logging.assertTrue(trackData.starts.length === trackData.ends.length);
-	        logging.assertTrue(trackData.starts.length === trackData.utids.length);
-	        for (let i = 0; i < trackData.starts.length; i++) {
-	            const tStart = trackData.starts[i];
-	            const tEnd = trackData.ends[i];
-	            const utid = trackData.utids[i];
-	            if (tEnd <= visibleWindowTime.start || tStart >= visibleWindowTime.end) {
-	                continue;
-	            }
-	            const rectStart = timeScale.timeToPx(tStart);
-	            const rectEnd = timeScale.timeToPx(tEnd);
-	            const rectWidth = rectEnd - rectStart;
-	            if (rectWidth < 0.1)
-	                continue;
-	            const hovered = this.hoveredUtid === utid;
-	            ctx.fillStyle = `hsl(${hue}, 50%, ${hovered ? 25 : 60}%`;
-	            ctx.fillRect(rectStart, MARGIN_TOP, rectEnd - rectStart, RECT_HEIGHT);
-	            // TODO: consider de-duplicating this code with the copied one from
-	            // chrome_slices/frontend.ts.
-	            let title = `[utid:${utid}]`;
-	            let subTitle = '';
-	            const threadInfo = globals.globals.threads.get(utid);
-	            if (threadInfo !== undefined) {
-	                title = `${threadInfo.procName} [${threadInfo.pid}]`;
-	                subTitle = `${threadInfo.threadName} [${threadInfo.tid}]`;
-	            }
-	            title = cropText(title, charWidth, rectWidth);
-	            subTitle = cropText(subTitle, charWidth, rectWidth);
-	            const rectXCenter = rectStart + rectWidth / 2;
-	            ctx.fillStyle = '#fff';
-	            ctx.font = '12px Google Sans';
-	            ctx.fillText(title, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 - 3);
-	            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-	            ctx.font = '10px Google Sans';
-	            ctx.fillText(subTitle, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 + 11);
-	        }
-	        const hoveredThread = globals.globals.threads.get(this.hoveredUtid);
-	        if (hoveredThread !== undefined) {
-	            const procTitle = `P: ${hoveredThread.procName} [${hoveredThread.pid}]`;
-	            const threadTitle = `T: ${hoveredThread.threadName} [${hoveredThread.tid}]`;
-	            ctx.font = '10px Google Sans';
-	            const procTitleWidth = ctx.measureText(procTitle).width;
-	            const threadTitleWidth = ctx.measureText(threadTitle).width;
-	            const width = Math.max(procTitleWidth, threadTitleWidth);
-	            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-	            ctx.fillRect(this.mouseXpos, MARGIN_TOP, width + 16, RECT_HEIGHT);
-	            ctx.fillStyle = 'hsl(200, 50%, 40%)';
-	            ctx.textAlign = 'left';
-	            ctx.fillText(procTitle, this.mouseXpos + 8, 18);
-	            ctx.fillText(threadTitle, this.mouseXpos + 8, 28);
-	        }
-	    }
-	    onMouseMove({ x, y }) {
-	        const trackData = this.trackData;
-	        this.mouseXpos = x;
-	        if (trackData === undefined)
-	            return;
-	        const { timeScale } = globals.globals.frontendLocalState;
-	        if (y < MARGIN_TOP || y > MARGIN_TOP + RECT_HEIGHT) {
-	            this.hoveredUtid = -1;
-	            return;
-	        }
-	        const t = timeScale.pxToTime(x);
-	        this.hoveredUtid = -1;
-	        for (let i = 0; i < trackData.starts.length; i++) {
-	            const tStart = trackData.starts[i];
-	            const tEnd = trackData.ends[i];
-	            const utid = trackData.utids[i];
-	            if (tStart <= t && t <= tEnd) {
-	                this.hoveredUtid = utid;
-	                break;
-	            }
-	        }
-	    }
-	    onMouseOut() {
-	        this.hoveredUtid = -1;
-	        this.mouseXpos = 0;
-	    }
-	    get trackData() {
-	        return globals.globals.trackDataStore.get(this.trackState.id);
-	    }
-	}
-	CpuSliceTrack.kind = common$2.CPU_SLICE_TRACK_KIND;
-	track_registry.trackRegistry.register(CpuSliceTrack);
-
-	});
-
-	unwrapExports(frontend$2);
-
-	var common$4 = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	exports.SLICE_TRACK_KIND = 'ChromeSliceTrack';
-
-	});
-
-	unwrapExports(common$4);
-	var common_1$2 = common$4.SLICE_TRACK_KIND;
-
-	var frontend$4 = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-
-
-
-
-
-	const SLICE_HEIGHT = 30;
-	const TRACK_PADDING = 5;
-	function hash(s) {
-	    let hash = 0x811c9dc5 & 0xfffffff;
-	    for (let i = 0; i < s.length; i++) {
-	        hash ^= s.charCodeAt(i);
-	        hash = (hash * 16777619) & 0xffffffff;
-	    }
-	    return hash & 0xff;
-	}
-	function getCurResolution() {
-	    // Truncate the resolution to the closest power of 10.
-	    const resolution = globals.globals.frontendLocalState.timeScale.deltaPxToDuration(1);
-	    return Math.pow(10, Math.floor(Math.log10(resolution)));
-	}
-	class ChromeSliceTrack extends track.Track {
-	    constructor(trackState) {
-	        super(trackState);
-	        this.hoveredTitleId = -1;
-	        this.reqPending = false;
-	    }
-	    static create(trackState) {
-	        return new ChromeSliceTrack(trackState);
-	    }
-	    reqDataDeferred() {
-	        const { visibleWindowTime } = globals.globals.frontendLocalState;
-	        const reqStart = visibleWindowTime.start - visibleWindowTime.duration;
-	        const reqEnd = visibleWindowTime.end + visibleWindowTime.duration;
-	        const reqRes = getCurResolution();
-	        this.reqPending = false;
-	        globals.globals.dispatch(actions.requestTrackData(this.trackState.id, reqStart, reqEnd, reqRes));
-	    }
-	    renderCanvas(ctx) {
-	        // TODO: fonts and colors should come from the CSS and not hardcoded here.
-	        const { timeScale, visibleWindowTime } = globals.globals.frontendLocalState;
-	        const trackData = this.trackData;
-	        // If there aren't enough cached slices data in |trackData| request more to
-	        // the controller.
-	        const inRange = trackData !== undefined &&
-	            (visibleWindowTime.start >= trackData.start &&
-	                visibleWindowTime.end <= trackData.end);
-	        if (!inRange || trackData.resolution > getCurResolution()) {
-	            if (!this.reqPending) {
-	                this.reqPending = true;
-	                setTimeout(() => this.reqDataDeferred(), 50);
-	            }
-	            if (trackData === undefined)
-	                return; // Can't possibly draw anything.
-	        }
-	        // If the cached trace slices don't fully cover the visible time range,
-	        // show a gray rectangle with a "Loading..." label.
-	        ctx.font = '12px Google Sans';
-	        if (trackData.start > visibleWindowTime.start) {
-	            const rectWidth = timeScale.timeToPx(Math.min(trackData.start, visibleWindowTime.end));
-	            ctx.fillStyle = '#eee';
-	            ctx.fillRect(0, TRACK_PADDING, rectWidth, SLICE_HEIGHT);
-	            ctx.fillStyle = '#666';
-	            ctx.fillText('loading...', rectWidth / 2, TRACK_PADDING + SLICE_HEIGHT / 2, rectWidth);
-	        }
-	        if (trackData.end < visibleWindowTime.end) {
-	            const rectX = timeScale.timeToPx(Math.max(trackData.end, visibleWindowTime.start));
-	            const rectWidth = timeScale.timeToPx(visibleWindowTime.end) - rectX;
-	            ctx.fillStyle = '#eee';
-	            ctx.fillRect(rectX, TRACK_PADDING, rectWidth, SLICE_HEIGHT);
-	            ctx.fillStyle = '#666';
-	            ctx.fillText('loading...', rectX + rectWidth / 2, TRACK_PADDING + SLICE_HEIGHT / 2, rectWidth);
-	        }
-	        ctx.font = '12px Google Sans';
-	        ctx.textAlign = 'center';
-	        // measuretext is expensive so we only use it once.
-	        const charWidth = ctx.measureText('abcdefghij').width / 10;
-	        const pxEnd = timeScale.timeToPx(visibleWindowTime.end);
-	        for (let i = 0; i < trackData.starts.length; i++) {
-	            const tStart = trackData.starts[i];
-	            const tEnd = trackData.ends[i];
-	            const depth = trackData.depths[i];
-	            const cat = trackData.strings[trackData.categories[i]];
-	            const titleId = trackData.titles[i];
-	            const title = trackData.strings[titleId];
-	            if (tEnd <= visibleWindowTime.start || tStart >= visibleWindowTime.end) {
-	                continue;
-	            }
-	            const rectXStart = Math.max(timeScale.timeToPx(tStart), 0);
-	            const rectXEnd = Math.min(timeScale.timeToPx(tEnd), pxEnd);
-	            const rectWidth = rectXEnd - rectXStart;
-	            if (rectWidth < 0.1)
-	                continue;
-	            const rectYStart = TRACK_PADDING + depth * SLICE_HEIGHT;
-	            const hovered = titleId === this.hoveredTitleId;
-	            const hue = hash(cat);
-	            const saturation = Math.min(20 + depth * 10, 70);
-	            ctx.fillStyle = `hsl(${hue}, ${saturation}%, ${hovered ? 30 : 65}%)`;
-	            ctx.fillRect(rectXStart, rectYStart, rectWidth, SLICE_HEIGHT);
-	            const nameLength = title.length * charWidth;
-	            ctx.fillStyle = 'white';
-	            const maxTextWidth = rectWidth - 15;
-	            let displayText = '';
-	            if (nameLength < maxTextWidth) {
-	                displayText = title;
-	            }
-	            else {
-	                // -3 for the 3 ellipsis.
-	                const displayedChars = Math.floor(maxTextWidth / charWidth) - 3;
-	                if (displayedChars > 3) {
-	                    displayText = title.substring(0, displayedChars) + '...';
-	                }
-	            }
-	            const rectXCenter = rectXStart + rectWidth / 2;
-	            ctx.fillText(displayText, rectXCenter, rectYStart + SLICE_HEIGHT / 2);
-	        }
-	    }
-	    onMouseMove({ x, y }) {
-	        const trackData = this.trackData;
-	        this.hoveredTitleId = -1;
-	        if (trackData === undefined)
-	            return;
-	        const { timeScale } = globals.globals.frontendLocalState;
-	        if (y < TRACK_PADDING)
-	            return;
-	        const t = timeScale.pxToTime(x);
-	        const depth = Math.floor(y / SLICE_HEIGHT);
-	        for (let i = 0; i < trackData.starts.length; i++) {
-	            const tStart = trackData.starts[i];
-	            const tEnd = trackData.ends[i];
-	            const titleId = trackData.titles[i];
-	            if (tStart <= t && t <= tEnd && depth === trackData.depths[i]) {
-	                this.hoveredTitleId = titleId;
-	                break;
-	            }
-	        }
-	    }
-	    onMouseOut() {
-	        this.hoveredTitleId = -1;
-	    }
-	    getHeight() {
-	        return SLICE_HEIGHT * (this.trackState.maxDepth + 1) + 2 * TRACK_PADDING;
-	    }
-	    get trackData() {
-	        return globals.globals.trackDataStore.get(this.trackState.id);
-	    }
-	}
-	ChromeSliceTrack.kind = common$4.SLICE_TRACK_KIND;
-	track_registry.trackRegistry.register(ChromeSliceTrack);
-
-	});
-
-	unwrapExports(frontend$4);
-
-	var all_frontend = createCommonjsModule(function (module, exports) {
-	// Copyright (C) 2018 The Android Open Source Project
-	//
-	// Licensed under the Apache License, Version 2.0 (the "License");
-	// you may not use this file except in compliance with the License.
-	// You may obtain a copy of the License at
-	//
-	//      http://www.apache.org/licenses/LICENSE-2.0
-	//
-	// Unless required by applicable law or agreed to in writing, software
-	// distributed under the License is distributed on an "AS IS" BASIS,
-	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-	// See the License for the specific language governing permissions and
-	// limitations under the License.
-	Object.defineProperty(exports, "__esModule", { value: true });
-	// Import all currently implemented tracks. After implemeting a new track, an
-	// import statement for it needs to be added here.
-
-
-
-
-	});
-
-	unwrapExports(all_frontend);
 
 	var mithril = createCommonjsModule(function (module) {
 	(function() {
@@ -2463,6 +1688,979 @@ var perfetto = (function () {
 	module["exports"] = m;
 	}());
 	});
+
+	var perf = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+	/**
+	 * Shorthand for if globals perf debug mode is on.
+	 */
+	exports.perfDebug = () => globals.globals.frontendLocalState.perfDebug;
+	/**
+	 * Returns performance.now() if perfDebug is enabled, otherwise 0.
+	 * This is needed because calling performance.now is generally expensive
+	 * and should not be done for every frame.
+	 */
+	exports.debugNow = () => exports.perfDebug() ? performance.now() : 0;
+	/**
+	 * Returns execution time of |fn| if perf debug mode is on. Returns 0 otherwise.
+	 */
+	function measure(fn) {
+	    const before = exports.debugNow();
+	    fn();
+	    return exports.perfDebug() ? exports.debugNow() - before : 0;
+	}
+	exports.measure = measure;
+	/**
+	 * Stores statistics about samples, and keeps a fixed size buffer of most recent
+	 * samples.
+	 */
+	class RunningStatistics {
+	    constructor(_maxBufferSize = 10) {
+	        this._maxBufferSize = _maxBufferSize;
+	        this._count = 0;
+	        this._mean = 0;
+	        this._lastValue = 0;
+	        this.buffer = [];
+	    }
+	    addValue(value) {
+	        this._lastValue = value;
+	        this.buffer.push(value);
+	        if (this.buffer.length > this._maxBufferSize) {
+	            this.buffer.shift();
+	        }
+	        this._mean = (this._mean * this._count + value) / (this._count + 1);
+	        this._count++;
+	    }
+	    get mean() {
+	        return this._mean;
+	    }
+	    get count() {
+	        return this._count;
+	    }
+	    get bufferMean() {
+	        return this.buffer.reduce((sum, v) => sum + v, 0) / this.buffer.length;
+	    }
+	    get bufferSize() {
+	        return this.buffer.length;
+	    }
+	    get maxBufferSize() {
+	        return this._maxBufferSize;
+	    }
+	    get last() {
+	        return this._lastValue;
+	    }
+	}
+	exports.RunningStatistics = RunningStatistics;
+	/**
+	 * Returns a summary string representation of a RunningStatistics object.
+	 */
+	function runningStatStr(stat) {
+	    return `Last: ${stat.last.toFixed(2)}ms | ` +
+	        `Avg: ${stat.mean.toFixed(2)}ms | ` +
+	        `Avg${stat.maxBufferSize}: ${stat.bufferMean.toFixed(2)}ms`;
+	}
+	exports.runningStatStr = runningStatStr;
+	/**
+	 * Globals singleton class that renders performance stats for the whole app.
+	 */
+	class PerfDisplay {
+	    constructor() {
+	        this.containers = [];
+	    }
+	    addContainer(container) {
+	        this.containers.push(container);
+	    }
+	    removeContainer(container) {
+	        const i = this.containers.indexOf(container);
+	        this.containers.splice(i, 1);
+	    }
+	    renderPerfStats() {
+	        if (!exports.perfDebug())
+	            return;
+	        const perfDisplayEl = this.getPerfDisplayEl();
+	        if (!perfDisplayEl)
+	            return;
+	        mithril.render(perfDisplayEl, [
+	            mithril('section', globals.globals.rafScheduler.renderPerfStats()),
+	            this.containers.map((c, i) => mithril('section', c.renderPerfStats(i)))
+	        ]);
+	    }
+	    getPerfDisplayEl() {
+	        return document.querySelector('.perf-stats-content');
+	    }
+	}
+	exports.perfDisplay = new PerfDisplay();
+
+	});
+
+	unwrapExports(perf);
+	var perf_1 = perf.perfDebug;
+	var perf_2 = perf.debugNow;
+	var perf_3 = perf.measure;
+	var perf_4 = perf.RunningStatistics;
+	var perf_5 = perf.runningStatStr;
+	var perf_6 = perf.perfDisplay;
+
+	var raf_scheduler = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+
+	function statTableHeader() {
+	    return mithril('tr', mithril('th', ''), mithril('th', 'Last (ms)'), mithril('th', 'Avg (ms)'), mithril('th', 'Avg-10 (ms)'));
+	}
+	function statTableRow(title, stat) {
+	    return mithril('tr', mithril('td', title), mithril('td', stat.last.toFixed(2)), mithril('td', stat.mean.toFixed(2)), mithril('td', stat.bufferMean.toFixed(2)));
+	}
+	// This class orchestrates all RAFs in the UI. It ensures that there is only
+	// one animation frame handler overall and that callbacks are called in
+	// predictable order. There are two types of callbacks here:
+	// - actions (e.g. pan/zoon animations), which will alter the "fast"
+	//  (main-thread-only) state (e.g. update visible time bounds @ 60 fps).
+	// - redraw callbacks that will repaint canvases.
+	// This class guarantees that, on each frame, redraw callbacks are called after
+	// all action callbacks.
+	class RafScheduler {
+	    constructor() {
+	        this.actionCallbacks = new Set();
+	        this.canvasRedrawCallbacks = new Set();
+	        this._syncDomRedraw = _ => { };
+	        this.hasScheduledNextFrame = false;
+	        this.requestedFullRedraw = false;
+	        this.isRedrawing = false;
+	        this.perfStats = {
+	            rafActions: new perf.RunningStatistics(),
+	            rafCanvas: new perf.RunningStatistics(),
+	            rafDom: new perf.RunningStatistics(),
+	            rafTotal: new perf.RunningStatistics(),
+	            domRedraw: new perf.RunningStatistics(),
+	        };
+	    }
+	    start(cb) {
+	        this.actionCallbacks.add(cb);
+	        this.maybeScheduleAnimationFrame();
+	    }
+	    stop(cb) {
+	        this.actionCallbacks.delete(cb);
+	    }
+	    addRedrawCallback(cb) {
+	        this.canvasRedrawCallbacks.add(cb);
+	    }
+	    removeRedrawCallback(cb) {
+	        this.canvasRedrawCallbacks.delete(cb);
+	    }
+	    scheduleRedraw() {
+	        this.maybeScheduleAnimationFrame(true);
+	    }
+	    set domRedraw(cb) {
+	        this._syncDomRedraw = cb || (_ => { });
+	    }
+	    scheduleFullRedraw() {
+	        this.requestedFullRedraw = true;
+	        this.maybeScheduleAnimationFrame(true);
+	    }
+	    syncDomRedraw(nowMs) {
+	        const redrawStart = perf.debugNow();
+	        this._syncDomRedraw(nowMs);
+	        if (perf.perfDebug()) {
+	            this.perfStats.domRedraw.addValue(perf.debugNow() - redrawStart);
+	        }
+	    }
+	    syncCanvasRedraw(nowMs) {
+	        const redrawStart = perf.debugNow();
+	        if (this.isRedrawing)
+	            return;
+	        this.isRedrawing = true;
+	        for (const redraw of this.canvasRedrawCallbacks)
+	            redraw(nowMs);
+	        this.isRedrawing = false;
+	        if (perf.perfDebug()) {
+	            this.perfStats.rafCanvas.addValue(perf.debugNow() - redrawStart);
+	        }
+	    }
+	    maybeScheduleAnimationFrame(force = false) {
+	        if (this.hasScheduledNextFrame)
+	            return;
+	        if (this.actionCallbacks.size !== 0 || force) {
+	            this.hasScheduledNextFrame = true;
+	            window.requestAnimationFrame(this.onAnimationFrame.bind(this));
+	        }
+	    }
+	    onAnimationFrame(nowMs) {
+	        const rafStart = perf.debugNow();
+	        this.hasScheduledNextFrame = false;
+	        const doFullRedraw = this.requestedFullRedraw;
+	        this.requestedFullRedraw = false;
+	        const actionTime = perf.measure(() => {
+	            for (const action of this.actionCallbacks)
+	                action(nowMs);
+	        });
+	        const domTime = perf.measure(() => {
+	            if (doFullRedraw)
+	                this.syncDomRedraw(nowMs);
+	        });
+	        const canvasTime = perf.measure(() => this.syncCanvasRedraw(nowMs));
+	        const totalRafTime = perf.debugNow() - rafStart;
+	        this.updatePerfStats(actionTime, domTime, canvasTime, totalRafTime);
+	        perf.perfDisplay.renderPerfStats();
+	        this.maybeScheduleAnimationFrame();
+	    }
+	    updatePerfStats(actionsTime, domTime, canvasTime, totalRafTime) {
+	        if (!perf.perfDebug())
+	            return;
+	        this.perfStats.rafActions.addValue(actionsTime);
+	        this.perfStats.rafDom.addValue(domTime);
+	        this.perfStats.rafCanvas.addValue(canvasTime);
+	        this.perfStats.rafTotal.addValue(totalRafTime);
+	    }
+	    renderPerfStats() {
+	        logging.assertTrue(perf.perfDebug());
+	        return mithril('div', mithril('div', [
+	            mithril('button', { onclick: () => this.scheduleRedraw() }, 'Do Canvas Redraw'),
+	            '   |   ',
+	            mithril('button', { onclick: () => this.scheduleFullRedraw() }, 'Do Full Redraw'),
+	        ]), mithril('div', 'Raf Timing ' +
+	            '(Total may not add up due to imprecision)'), mithril('table', statTableHeader(), statTableRow('Actions', this.perfStats.rafActions), statTableRow('Dom', this.perfStats.rafDom), statTableRow('Canvas', this.perfStats.rafCanvas), statTableRow('Total', this.perfStats.rafTotal)), mithril('div', 'Dom redraw: ' +
+	            `Count: ${this.perfStats.domRedraw.count} | ` +
+	            perf.runningStatStr(this.perfStats.domRedraw)));
+	    }
+	}
+	exports.RafScheduler = RafScheduler;
+
+	});
+
+	unwrapExports(raf_scheduler);
+	var raf_scheduler_1 = raf_scheduler.RafScheduler;
+
+	var globals = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+
+
+	/**
+	 * Global accessors for state/dispatch in the frontend.
+	 */
+	class Globals {
+	    constructor() {
+	        this._dispatch = undefined;
+	        this._state = undefined;
+	        this._trackDataStore = undefined;
+	        this._queryResults = undefined;
+	        this._frontendLocalState = undefined;
+	        this._rafScheduler = undefined;
+	        this._overviewStore = undefined;
+	        this._threadMap = undefined;
+	    }
+	    initialize(dispatch) {
+	        this._dispatch = dispatch;
+	        this._state = state.createEmptyState();
+	        this._trackDataStore = new Map();
+	        this._queryResults = new Map();
+	        this._frontendLocalState = new frontend_local_state.FrontendLocalState();
+	        this._rafScheduler = new raf_scheduler.RafScheduler();
+	        this._overviewStore = new Map();
+	        this._threadMap = new Map();
+	    }
+	    get state() {
+	        return logging.assertExists(this._state);
+	    }
+	    set state(state$$1) {
+	        this._state = logging.assertExists(state$$1);
+	    }
+	    get dispatch() {
+	        return logging.assertExists(this._dispatch);
+	    }
+	    get overviewStore() {
+	        return logging.assertExists(this._overviewStore);
+	    }
+	    get trackDataStore() {
+	        return logging.assertExists(this._trackDataStore);
+	    }
+	    get queryResults() {
+	        return logging.assertExists(this._queryResults);
+	    }
+	    get frontendLocalState() {
+	        return logging.assertExists(this._frontendLocalState);
+	    }
+	    get rafScheduler() {
+	        return logging.assertExists(this._rafScheduler);
+	    }
+	    get threads() {
+	        return logging.assertExists(this._threadMap);
+	    }
+	    resetForTesting() {
+	        this._dispatch = undefined;
+	        this._state = undefined;
+	        this._trackDataStore = undefined;
+	        this._queryResults = undefined;
+	        this._frontendLocalState = undefined;
+	        this._rafScheduler = undefined;
+	        this._overviewStore = undefined;
+	    }
+	}
+	exports.globals = new Globals();
+
+	});
+
+	unwrapExports(globals);
+	var globals_1 = globals.globals;
+
+	var track = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+	/**
+	 * The abstract class that needs to be implemented by all tracks.
+	 */
+	class Track {
+	    /**
+	     * Receive data published by the TrackController of this track.
+	     */
+	    constructor(trackState) {
+	        this.trackState = trackState;
+	    }
+	    getHeight() {
+	        return 40;
+	    }
+	    onMouseMove(_position) { }
+	    onMouseOut() { }
+	}
+	exports.Track = Track;
+
+	});
+
+	unwrapExports(track);
+	var track_1 = track.Track;
+
+	var registry = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+	class Registry {
+	    constructor() {
+	        this.registry = new Map();
+	    }
+	    register(registrant) {
+	        const kind = registrant.kind;
+	        if (this.registry.has(kind)) {
+	            throw new Error(`Registrant ${kind} already exists in the registry`);
+	        }
+	        this.registry.set(kind, registrant);
+	    }
+	    has(kind) {
+	        return this.registry.has(kind);
+	    }
+	    get(kind) {
+	        const registrant = this.registry.get(kind);
+	        if (registrant === undefined) {
+	            throw new Error(`${kind} has not been registered.`);
+	        }
+	        return registrant;
+	    }
+	    unregisterAllForTesting() {
+	        this.registry.clear();
+	    }
+	}
+	exports.Registry = Registry;
+
+	});
+
+	unwrapExports(registry);
+	var registry_1 = registry.Registry;
+
+	var track_registry = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+	/**
+	 * Global registry that maps types to TrackCreator.
+	 */
+	exports.trackRegistry = new registry.Registry();
+
+	});
+
+	unwrapExports(track_registry);
+	var track_registry_1 = track_registry.trackRegistry;
+
+	var common = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+	exports.CPU_COUNTER_TRACK_KIND = 'CpuCounterTrack';
+
+	});
+
+	unwrapExports(common);
+	var common_1 = common.CPU_COUNTER_TRACK_KIND;
+
+	var frontend = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+
+
+	/**
+	 * Demo track as so we can at least have two kinds of tracks.
+	 */
+	class CpuCounterTrack extends track.Track {
+	    constructor(trackState) {
+	        super(trackState);
+	    }
+	    static create(trackState) {
+	        return new CpuCounterTrack(trackState);
+	    }
+	    // No-op
+	    consumeData() { }
+	    renderCanvas(ctx) {
+	        const { timeScale, visibleWindowTime } = globals.globals.frontendLocalState;
+	        // It is possible to get width of track from visibleWindowMs.
+	        const visibleStartPx = timeScale.timeToPx(visibleWindowTime.start);
+	        const visibleEndPx = timeScale.timeToPx(visibleWindowTime.end);
+	        const visibleWidthPx = visibleEndPx - visibleStartPx;
+	        ctx.fillStyle = '#eee';
+	        ctx.fillRect(Math.round(0.25 * visibleWidthPx), 0, Math.round(0.5 * visibleWidthPx), this.getHeight());
+	        ctx.font = '16px Arial';
+	        ctx.fillStyle = '#000';
+	        ctx.fillText('Drawing ' + CpuCounterTrack.kind, Math.round(0.4 * visibleWidthPx), 20);
+	    }
+	}
+	CpuCounterTrack.kind = common.CPU_COUNTER_TRACK_KIND;
+	track_registry.trackRegistry.register(CpuCounterTrack);
+
+	});
+
+	unwrapExports(frontend);
+
+	var common$2 = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+	exports.CPU_SLICE_TRACK_KIND = 'CpuSliceTrack';
+
+	});
+
+	unwrapExports(common$2);
+	var common_1$1 = common$2.CPU_SLICE_TRACK_KIND;
+
+	var frontend$2 = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+
+
+
+
+	const MARGIN_TOP = 5;
+	const RECT_HEIGHT = 30;
+	function cropText(str, charWidth, rectWidth) {
+	    const maxTextWidth = rectWidth - 4;
+	    let displayText = '';
+	    const nameLength = str.length * charWidth;
+	    if (nameLength < maxTextWidth) {
+	        displayText = str;
+	    }
+	    else {
+	        // -3 for the 3 ellipsis.
+	        const displayedChars = Math.floor(maxTextWidth / charWidth) - 3;
+	        if (displayedChars > 3) {
+	            displayText = str.substring(0, displayedChars) + '...';
+	        }
+	    }
+	    return displayText;
+	}
+	function getCurResolution() {
+	    // Truncate the resolution to the closest power of 10.
+	    const resolution = globals.globals.frontendLocalState.timeScale.deltaPxToDuration(1);
+	    return Math.pow(10, Math.floor(Math.log10(resolution)));
+	}
+	class CpuSliceTrack extends track.Track {
+	    constructor(trackState) {
+	        super(trackState);
+	        this.hoveredUtid = -1;
+	        this.reqPending = false;
+	    }
+	    static create(trackState) {
+	        return new CpuSliceTrack(trackState);
+	    }
+	    reqDataDeferred() {
+	        const { visibleWindowTime } = globals.globals.frontendLocalState;
+	        const reqStart = visibleWindowTime.start - visibleWindowTime.duration;
+	        const reqEnd = visibleWindowTime.end + visibleWindowTime.duration;
+	        const reqRes = getCurResolution();
+	        this.reqPending = false;
+	        globals.globals.dispatch(actions.requestTrackData(this.trackState.id, reqStart, reqEnd, reqRes));
+	    }
+	    renderCanvas(ctx) {
+	        // TODO: fonts and colors should come from the CSS and not hardcoded here.
+	        const { timeScale, visibleWindowTime } = globals.globals.frontendLocalState;
+	        const trackData = this.trackData;
+	        // If there aren't enough cached slices data in |trackData| request more to
+	        // the controller.
+	        const inRange = trackData !== undefined &&
+	            (visibleWindowTime.start >= trackData.start &&
+	                visibleWindowTime.end <= trackData.end);
+	        if (!inRange || trackData.resolution > getCurResolution()) {
+	            if (!this.reqPending) {
+	                this.reqPending = true;
+	                setTimeout(() => this.reqDataDeferred(), 50);
+	            }
+	            if (trackData === undefined)
+	                return; // Can't possibly draw anything.
+	        }
+	        ctx.textAlign = 'center';
+	        ctx.font = '12px Google Sans';
+	        const charWidth = ctx.measureText('dbpqaouk').width / 8;
+	        // TODO: this needs to be kept in sync with the hue generation algorithm
+	        // of overview_timeline_panel.ts
+	        const hue = (128 + (32 * this.trackState.cpu)) % 256;
+	        // If the cached trace slices don't fully cover the visible time range,
+	        // show a gray rectangle with a "Loading..." label.
+	        ctx.font = '12px Google Sans';
+	        if (trackData.start > visibleWindowTime.start) {
+	            const rectWidth = timeScale.timeToPx(Math.min(trackData.start, visibleWindowTime.end));
+	            ctx.fillStyle = '#eee';
+	            ctx.fillRect(0, MARGIN_TOP, rectWidth, RECT_HEIGHT);
+	            ctx.fillStyle = '#666';
+	            ctx.fillText('loading...', rectWidth / 2, MARGIN_TOP + RECT_HEIGHT / 2, rectWidth);
+	        }
+	        if (trackData.end < visibleWindowTime.end) {
+	            const rectX = timeScale.timeToPx(Math.max(trackData.end, visibleWindowTime.start));
+	            const rectWidth = timeScale.timeToPx(visibleWindowTime.end) - rectX;
+	            ctx.fillStyle = '#eee';
+	            ctx.fillRect(rectX, MARGIN_TOP, rectWidth, RECT_HEIGHT);
+	            ctx.fillStyle = '#666';
+	            ctx.fillText('loading...', rectX + rectWidth / 2, MARGIN_TOP + RECT_HEIGHT / 2, rectWidth);
+	        }
+	        logging.assertTrue(trackData.starts.length === trackData.ends.length);
+	        logging.assertTrue(trackData.starts.length === trackData.utids.length);
+	        for (let i = 0; i < trackData.starts.length; i++) {
+	            const tStart = trackData.starts[i];
+	            const tEnd = trackData.ends[i];
+	            const utid = trackData.utids[i];
+	            if (tEnd <= visibleWindowTime.start || tStart >= visibleWindowTime.end) {
+	                continue;
+	            }
+	            const rectStart = timeScale.timeToPx(tStart);
+	            const rectEnd = timeScale.timeToPx(tEnd);
+	            const rectWidth = rectEnd - rectStart;
+	            if (rectWidth < 0.1)
+	                continue;
+	            const hovered = this.hoveredUtid === utid;
+	            ctx.fillStyle = `hsl(${hue}, 50%, ${hovered ? 25 : 60}%`;
+	            ctx.fillRect(rectStart, MARGIN_TOP, rectEnd - rectStart, RECT_HEIGHT);
+	            // TODO: consider de-duplicating this code with the copied one from
+	            // chrome_slices/frontend.ts.
+	            let title = `[utid:${utid}]`;
+	            let subTitle = '';
+	            const threadInfo = globals.globals.threads.get(utid);
+	            if (threadInfo !== undefined) {
+	                title = `${threadInfo.procName} [${threadInfo.pid}]`;
+	                subTitle = `${threadInfo.threadName} [${threadInfo.tid}]`;
+	            }
+	            // Don't render text when we have less than 5px to play with.
+	            if (rectWidth < 5)
+	                continue;
+	            title = cropText(title, charWidth, rectWidth);
+	            subTitle = cropText(subTitle, charWidth, rectWidth);
+	            const rectXCenter = rectStart + rectWidth / 2;
+	            ctx.fillStyle = '#fff';
+	            ctx.font = '12px Google Sans';
+	            ctx.fillText(title, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 - 3);
+	            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+	            ctx.font = '10px Google Sans';
+	            ctx.fillText(subTitle, rectXCenter, MARGIN_TOP + RECT_HEIGHT / 2 + 11);
+	        }
+	        const hoveredThread = globals.globals.threads.get(this.hoveredUtid);
+	        if (hoveredThread !== undefined) {
+	            const procTitle = `P: ${hoveredThread.procName} [${hoveredThread.pid}]`;
+	            const threadTitle = `T: ${hoveredThread.threadName} [${hoveredThread.tid}]`;
+	            ctx.font = '10px Google Sans';
+	            const procTitleWidth = ctx.measureText(procTitle).width;
+	            const threadTitleWidth = ctx.measureText(threadTitle).width;
+	            const width = Math.max(procTitleWidth, threadTitleWidth);
+	            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+	            ctx.fillRect(this.mouseXpos, MARGIN_TOP, width + 16, RECT_HEIGHT);
+	            ctx.fillStyle = 'hsl(200, 50%, 40%)';
+	            ctx.textAlign = 'left';
+	            ctx.fillText(procTitle, this.mouseXpos + 8, 18);
+	            ctx.fillText(threadTitle, this.mouseXpos + 8, 28);
+	        }
+	    }
+	    onMouseMove({ x, y }) {
+	        const trackData = this.trackData;
+	        this.mouseXpos = x;
+	        if (trackData === undefined)
+	            return;
+	        const { timeScale } = globals.globals.frontendLocalState;
+	        if (y < MARGIN_TOP || y > MARGIN_TOP + RECT_HEIGHT) {
+	            this.hoveredUtid = -1;
+	            return;
+	        }
+	        const t = timeScale.pxToTime(x);
+	        this.hoveredUtid = -1;
+	        for (let i = 0; i < trackData.starts.length; i++) {
+	            const tStart = trackData.starts[i];
+	            const tEnd = trackData.ends[i];
+	            const utid = trackData.utids[i];
+	            if (tStart <= t && t <= tEnd) {
+	                this.hoveredUtid = utid;
+	                break;
+	            }
+	        }
+	    }
+	    onMouseOut() {
+	        this.hoveredUtid = -1;
+	        this.mouseXpos = 0;
+	    }
+	    get trackData() {
+	        return globals.globals.trackDataStore.get(this.trackState.id);
+	    }
+	}
+	CpuSliceTrack.kind = common$2.CPU_SLICE_TRACK_KIND;
+	track_registry.trackRegistry.register(CpuSliceTrack);
+
+	});
+
+	unwrapExports(frontend$2);
+
+	var common$4 = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+	exports.SLICE_TRACK_KIND = 'ChromeSliceTrack';
+
+	});
+
+	unwrapExports(common$4);
+	var common_1$2 = common$4.SLICE_TRACK_KIND;
+
+	var frontend$4 = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+
+
+
+	const SLICE_HEIGHT = 30;
+	const TRACK_PADDING = 5;
+	function hash(s) {
+	    let hash = 0x811c9dc5 & 0xfffffff;
+	    for (let i = 0; i < s.length; i++) {
+	        hash ^= s.charCodeAt(i);
+	        hash = (hash * 16777619) & 0xffffffff;
+	    }
+	    return hash & 0xff;
+	}
+	function getCurResolution() {
+	    // Truncate the resolution to the closest power of 10.
+	    const resolution = globals.globals.frontendLocalState.timeScale.deltaPxToDuration(1);
+	    return Math.pow(10, Math.floor(Math.log10(resolution)));
+	}
+	class ChromeSliceTrack extends track.Track {
+	    constructor(trackState) {
+	        super(trackState);
+	        this.hoveredTitleId = -1;
+	        this.reqPending = false;
+	    }
+	    static create(trackState) {
+	        return new ChromeSliceTrack(trackState);
+	    }
+	    reqDataDeferred() {
+	        const { visibleWindowTime } = globals.globals.frontendLocalState;
+	        const reqStart = visibleWindowTime.start - visibleWindowTime.duration;
+	        const reqEnd = visibleWindowTime.end + visibleWindowTime.duration;
+	        const reqRes = getCurResolution();
+	        this.reqPending = false;
+	        globals.globals.dispatch(actions.requestTrackData(this.trackState.id, reqStart, reqEnd, reqRes));
+	    }
+	    renderCanvas(ctx) {
+	        // TODO: fonts and colors should come from the CSS and not hardcoded here.
+	        const { timeScale, visibleWindowTime } = globals.globals.frontendLocalState;
+	        const trackData = this.trackData;
+	        // If there aren't enough cached slices data in |trackData| request more to
+	        // the controller.
+	        const inRange = trackData !== undefined &&
+	            (visibleWindowTime.start >= trackData.start &&
+	                visibleWindowTime.end <= trackData.end);
+	        if (!inRange || trackData.resolution > getCurResolution()) {
+	            if (!this.reqPending) {
+	                this.reqPending = true;
+	                setTimeout(() => this.reqDataDeferred(), 50);
+	            }
+	            if (trackData === undefined)
+	                return; // Can't possibly draw anything.
+	        }
+	        // If the cached trace slices don't fully cover the visible time range,
+	        // show a gray rectangle with a "Loading..." label.
+	        ctx.font = '12px Google Sans';
+	        if (trackData.start > visibleWindowTime.start) {
+	            const rectWidth = timeScale.timeToPx(Math.min(trackData.start, visibleWindowTime.end));
+	            ctx.fillStyle = '#eee';
+	            ctx.fillRect(0, TRACK_PADDING, rectWidth, SLICE_HEIGHT);
+	            ctx.fillStyle = '#666';
+	            ctx.fillText('loading...', rectWidth / 2, TRACK_PADDING + SLICE_HEIGHT / 2, rectWidth);
+	        }
+	        if (trackData.end < visibleWindowTime.end) {
+	            const rectX = timeScale.timeToPx(Math.max(trackData.end, visibleWindowTime.start));
+	            const rectWidth = timeScale.timeToPx(visibleWindowTime.end) - rectX;
+	            ctx.fillStyle = '#eee';
+	            ctx.fillRect(rectX, TRACK_PADDING, rectWidth, SLICE_HEIGHT);
+	            ctx.fillStyle = '#666';
+	            ctx.fillText('loading...', rectX + rectWidth / 2, TRACK_PADDING + SLICE_HEIGHT / 2, rectWidth);
+	        }
+	        ctx.font = '12px Google Sans';
+	        ctx.textAlign = 'center';
+	        // measuretext is expensive so we only use it once.
+	        const charWidth = ctx.measureText('abcdefghij').width / 10;
+	        const pxEnd = timeScale.timeToPx(visibleWindowTime.end);
+	        for (let i = 0; i < trackData.starts.length; i++) {
+	            const tStart = trackData.starts[i];
+	            const tEnd = trackData.ends[i];
+	            const depth = trackData.depths[i];
+	            const cat = trackData.strings[trackData.categories[i]];
+	            const titleId = trackData.titles[i];
+	            const title = trackData.strings[titleId];
+	            if (tEnd <= visibleWindowTime.start || tStart >= visibleWindowTime.end) {
+	                continue;
+	            }
+	            const rectXStart = Math.max(timeScale.timeToPx(tStart), 0);
+	            const rectXEnd = Math.min(timeScale.timeToPx(tEnd), pxEnd);
+	            const rectWidth = rectXEnd - rectXStart;
+	            if (rectWidth < 0.1)
+	                continue;
+	            const rectYStart = TRACK_PADDING + depth * SLICE_HEIGHT;
+	            const hovered = titleId === this.hoveredTitleId;
+	            const hue = hash(cat);
+	            const saturation = Math.min(20 + depth * 10, 70);
+	            ctx.fillStyle = `hsl(${hue}, ${saturation}%, ${hovered ? 30 : 65}%)`;
+	            ctx.fillRect(rectXStart, rectYStart, rectWidth, SLICE_HEIGHT);
+	            const nameLength = title.length * charWidth;
+	            ctx.fillStyle = 'white';
+	            const maxTextWidth = rectWidth - 15;
+	            let displayText = '';
+	            if (nameLength < maxTextWidth) {
+	                displayText = title;
+	            }
+	            else {
+	                // -3 for the 3 ellipsis.
+	                const displayedChars = Math.floor(maxTextWidth / charWidth) - 3;
+	                if (displayedChars > 3) {
+	                    displayText = title.substring(0, displayedChars) + '...';
+	                }
+	            }
+	            const rectXCenter = rectXStart + rectWidth / 2;
+	            ctx.fillText(displayText, rectXCenter, rectYStart + SLICE_HEIGHT / 2);
+	        }
+	    }
+	    onMouseMove({ x, y }) {
+	        const trackData = this.trackData;
+	        this.hoveredTitleId = -1;
+	        if (trackData === undefined)
+	            return;
+	        const { timeScale } = globals.globals.frontendLocalState;
+	        if (y < TRACK_PADDING)
+	            return;
+	        const t = timeScale.pxToTime(x);
+	        const depth = Math.floor(y / SLICE_HEIGHT);
+	        for (let i = 0; i < trackData.starts.length; i++) {
+	            const tStart = trackData.starts[i];
+	            const tEnd = trackData.ends[i];
+	            const titleId = trackData.titles[i];
+	            if (tStart <= t && t <= tEnd && depth === trackData.depths[i]) {
+	                this.hoveredTitleId = titleId;
+	                break;
+	            }
+	        }
+	    }
+	    onMouseOut() {
+	        this.hoveredTitleId = -1;
+	    }
+	    getHeight() {
+	        return SLICE_HEIGHT * (this.trackState.maxDepth + 1) + 2 * TRACK_PADDING;
+	    }
+	    get trackData() {
+	        return globals.globals.trackDataStore.get(this.trackState.id);
+	    }
+	}
+	ChromeSliceTrack.kind = common$4.SLICE_TRACK_KIND;
+	track_registry.trackRegistry.register(ChromeSliceTrack);
+
+	});
+
+	unwrapExports(frontend$4);
+
+	var all_frontend = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+	// Import all currently implemented tracks. After implemeting a new track, an
+	// import statement for it needs to be added here.
+
+
+
+
+	});
+
+	unwrapExports(all_frontend);
 
 	var deferred = createCommonjsModule(function (module, exports) {
 	// Copyright (C) 2018 The Android Open Source Project
@@ -10762,6 +10960,41 @@ var perfetto = (function () {
 
 
 
+	const ALL_PROCESSES_QUERY = 'select name, pid from process order by name;';
+	const CPU_TIME_FOR_PROCESSES = `
+select
+  process.name,
+  tot_proc/1e9 as cpu_sec
+from
+  (select
+    upid,
+    sum(tot_thd) as tot_proc
+  from
+    (select
+      utid,
+      sum(dur) as tot_thd
+    from sched group by utid)
+  join thread using(utid) group by upid)
+join process using(upid)
+order by cpu_sec desc limit 100;`;
+	const CYCLES_PER_P_STATE_PER_CPU = `
+select ref as cpu, value as freq, sum(dur * value)/1e6 as mcycles
+from counters group by cpu, freq order by mcycles desc limit 20;`;
+	const CPU_TIME_BY_CLUSTER_BY_PROCESS = `
+select
+thread.name as comm,
+case when cpug = 0 then 'big' else 'little' end as core,
+cpu_sec from
+  (select cpu/4 cpug, utid, sum(dur)/1e9 as cpu_sec
+  from sched group by utid, cpug order by cpu_sec desc)
+left join thread using(utid)
+limit 20;`;
+	function createCannedQuery(query) {
+	    return (e) => {
+	        e.preventDefault();
+	        globals.globals.dispatch(actions.executeQuery('0', 'command', query));
+	    };
+	}
 	const EXAMPLE_TRACE_URL = 'https://storage.googleapis.com/perfetto-misc/example_trace_30s';
 	const SECTIONS = [
 	    {
@@ -10771,7 +11004,7 @@ var perfetto = (function () {
 	        items: [
 	            { t: 'Open trace file', a: popupFileSelectionDialog, i: 'folder_open' },
 	            { t: 'Open example trace', a: handleOpenTraceUrl, i: 'description' },
-	            { t: 'Record new trace', a: navigateHome, i: 'fiber_smart_record' },
+	            { t: 'Record new trace', a: navigateRecord, i: 'fiber_smart_record' },
 	            { t: 'Share current trace', a: dispatchCreatePermalink, i: 'share' },
 	        ],
 	    },
@@ -10800,8 +11033,26 @@ var perfetto = (function () {
 	        title: 'Metrics and auditors',
 	        summary: 'Add new tracks to the workspace',
 	        items: [
-	            { t: 'CPU Usage breakdown', a: navigateHome, i: 'table_chart' },
-	            { t: 'Memory breakdown', a: navigateHome, i: 'memory' },
+	            {
+	                t: 'All Processes',
+	                a: createCannedQuery(ALL_PROCESSES_QUERY),
+	                i: 'search',
+	            },
+	            {
+	                t: 'CPU Time by process',
+	                a: createCannedQuery(CPU_TIME_FOR_PROCESSES),
+	                i: 'search',
+	            },
+	            {
+	                t: 'Cycles by p-state by CPU',
+	                a: createCannedQuery(CYCLES_PER_P_STATE_PER_CPU),
+	                i: 'search',
+	            },
+	            {
+	                t: 'CPU Time by cluster by process',
+	                a: createCannedQuery(CPU_TIME_BY_CLUSTER_BY_PROCESS),
+	                i: 'search',
+	            },
 	        ],
 	    },
 	];
@@ -10821,8 +11072,13 @@ var perfetto = (function () {
 	        return;
 	    globals.globals.dispatch(actions.openTraceFromFile(e.target.files[0]));
 	}
-	function navigateHome(_) {
+	function navigateHome(e) {
+	    e.preventDefault();
 	    globals.globals.dispatch(actions.navigate('/'));
+	}
+	function navigateRecord(e) {
+	    e.preventDefault();
+	    globals.globals.dispatch(actions.navigate('/record'));
 	}
 	function dispatchCreatePermalink(e) {
 	    e.preventDefault();
@@ -11015,6 +11271,25 @@ var perfetto = (function () {
 	        return mithril('.alerts', renderPermalink());
 	    },
 	};
+	const TogglePerfDebugButton = {
+	    view() {
+	        return mithril('.perf-monitor-button', mithril('button', {
+	            onclick: () => globals.globals.frontendLocalState.togglePerfDebug(),
+	        }, mithril('i.material-icons', {
+	            title: 'Toggle Perf Debug Mode',
+	        }, 'assessment')));
+	    }
+	};
+	const PerfStats = {
+	    view() {
+	        const perfDebug = globals.globals.frontendLocalState.perfDebug;
+	        const children = [mithril(TogglePerfDebugButton)];
+	        if (perfDebug) {
+	            children.unshift(mithril('.perf-stats-content'));
+	        }
+	        return mithril(`.perf-stats[expanded=${perfDebug}]`, children);
+	    }
+	};
 	/**
 	 * Wrap component with common UI elements (nav bar etc).
 	 */
@@ -11026,6 +11301,7 @@ var perfetto = (function () {
 	                mithril(topbar.Topbar),
 	                mithril(component),
 	                mithril(Alerts),
+	                mithril(PerfStats),
 	            ];
 	        },
 	    };
@@ -11065,6 +11341,55 @@ var perfetto = (function () {
 
 	unwrapExports(home_page);
 	var home_page_1 = home_page.HomePage;
+
+	var record_page = createCommonjsModule(function (module, exports) {
+	// Copyright (C) 2018 The Android Open Source Project
+	//
+	// Licensed under the Apache License, Version 2.0 (the "License");
+	// you may not use this file except in compliance with the License.
+	// You may obtain a copy of the License at
+	//
+	//      http://www.apache.org/licenses/LICENSE-2.0
+	//
+	// Unless required by applicable law or agreed to in writing, software
+	// distributed under the License is distributed on an "AS IS" BASIS,
+	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+	// See the License for the specific language governing permissions and
+	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
+
+
+	const RECORD_COMMAND_LINE = 'echo CgYIgKAGIAESIwohCgxsaW51eC5mdHJhY2UQAKIGDhIFc2NoZWQSBWlucHV0GJBOMh0KFnBlcmZldHRvLnRyYWNlZF9wcm9iZXMQgCAYBEAASAA= | base64 --decode | adb shell "perfetto -c - -o /data/misc/perfetto-traces/trace" && adb pull /data/misc/perfetto-traces/trace /tmp/trace';
+	function copyToClipboard(text) {
+	    return tslib_es6.__awaiter(this, void 0, void 0, function* () {
+	        try {
+	            // TODO(hjd): Fix typescript type for navigator.
+	            // tslint:disable-next-line no-any
+	            yield navigator.clipboard.writeText(text);
+	        }
+	        catch (err) {
+	            console.error(`Failed to copy "${text}" to clipboard: ${err}`);
+	        }
+	    });
+	}
+	const CodeSample = {
+	    view({ attrs }) {
+	        return mithril('.example-code', mithril('code', attrs.text), mithril('button', {
+	            onclick: () => copyToClipboard(attrs.text),
+	        }, 'Copy to clipboard'));
+	    },
+	};
+	exports.RecordPage = pages.createPage({
+	    view() {
+	        return mithril('.text-column', 'To collect a 10 second Perfetto trace from an Android phone run this', ' command:', mithril(CodeSample, { text: RECORD_COMMAND_LINE }), 'Then click "Open trace file" in the menu to the left and select', ' "/tmp/trace".');
+	    }
+	});
+
+	});
+
+	unwrapExports(record_page);
+	var record_page_1 = record_page.RecordPage;
 
 	var router = createCommonjsModule(function (module, exports) {
 	// Copyright (C) 2018 The Android Open Source Project
@@ -11113,7 +11438,7 @@ var perfetto = (function () {
 	    setRouteOnHash(route) {
 	        history.pushState(undefined, undefined, exports.ROUTE_PREFIX + route);
 	        if (!(route in this.routes)) {
-	            // Redirect to default route.
+	            console.info(`Route ${route} not known redirecting to ${this.defaultRoute}.`);
 	            this.dispatch(actions.navigate(this.defaultRoute));
 	        }
 	    }
@@ -11666,6 +11991,7 @@ var perfetto = (function () {
 
 
 
+
 	/**
 	 * If the panel container scrolls, the backing canvas height is
 	 * SCROLLING_CANVAS_OVERDRAW_FACTOR * parent container height.
@@ -11680,12 +12006,19 @@ var perfetto = (function () {
 	        this.panelHeights = [];
 	        this.totalPanelHeight = 0;
 	        this.canvasHeight = 0;
+	        this.panelPerfStats = new WeakMap();
+	        this.perfStats = {
+	            totalPanels: 0,
+	            panelsOnCanvas: 0,
+	            renderStats: new perf.RunningStatistics(10),
+	        };
 	        this.onResize = () => { };
 	        this.parentOnScroll = () => { };
 	        this.canvasOverdrawFactor =
 	            vnode.attrs.doesScroll ? SCROLLING_CANVAS_OVERDRAW_FACTOR : 1;
 	        this.canvasRedrawer = () => this.redrawCanvas();
 	        globals.globals.rafScheduler.addRedrawCallback(this.canvasRedrawer);
+	        perf.perfDisplay.addContainer(this);
 	    }
 	    oncreate(vnodeDom) {
 	        const attrs = vnodeDom.attrs;
@@ -11731,12 +12064,16 @@ var perfetto = (function () {
 	        if (attrs.doesScroll) {
 	            dom.parentElement.removeEventListener('scroll', this.parentOnScroll);
 	        }
+	        perf.perfDisplay.removeContainer(this);
 	    }
 	    view({ attrs }) {
 	        // We receive a new vnode object with new attrs on every mithril redraw. We
 	        // store the latest attrs so redrawCanvas can use it.
 	        this.attrs = attrs;
-	        return mithril('.scroll-limiter', mithril('canvas.main-canvas'), attrs.panels.map(panel$$1 => mithril('.panel', panel$$1)));
+	        const renderPanel = (panel$$1) => perf.perfDebug() ?
+	            mithril('.panel', panel$$1, mithril('.debug-panel-border')) :
+	            mithril('.panel', panel$$1);
+	        return mithril('.scroll-limiter', mithril('canvas.main-canvas'), attrs.panels.map(renderPanel));
 	    }
 	    onupdate(vnodeDom) {
 	        this.repositionCanvas(vnodeDom);
@@ -11785,6 +12122,7 @@ var perfetto = (function () {
 	        return yEnd > 0 && yStart < this.canvasHeight;
 	    }
 	    redrawCanvas() {
+	        const redrawStart = perf.debugNow();
 	        if (!this.ctx)
 	            return;
 	        this.ctx.clearRect(0, 0, this.parentWidth, this.canvasHeight);
@@ -11792,6 +12130,7 @@ var perfetto = (function () {
 	        let panelYStart = 0;
 	        const panels = logging.assertExists(this.attrs).panels;
 	        logging.assertTrue(panels.length === this.panelHeights.length);
+	        let totalOnCanvas = 0;
 	        for (let i = 0; i < panels.length; i++) {
 	            const panel$$1 = panels[i];
 	            const panelHeight = this.panelHeights[i];
@@ -11800,6 +12139,7 @@ var perfetto = (function () {
 	                panelYStart += panelHeight;
 	                continue;
 	            }
+	            totalOnCanvas++;
 	            if (!panel.isPanelVNode(panel$$1)) {
 	                throw Error('Vnode passed to panel container is not a panel');
 	            }
@@ -11809,10 +12149,42 @@ var perfetto = (function () {
 	            const size = { width: this.parentWidth, height: panelHeight };
 	            clipRect.rect(0, 0, size.width, size.height);
 	            this.ctx.clip(clipRect);
+	            const beforeRender = perf.debugNow();
 	            panel$$1.state.renderCanvas(this.ctx, size, panel$$1);
+	            this.updatePanelStats(i, panel$$1.state, perf.debugNow() - beforeRender, this.ctx, size);
 	            this.ctx.restore();
 	            panelYStart += panelHeight;
 	        }
+	        const redrawDur = perf.debugNow() - redrawStart;
+	        this.updatePerfStats(redrawDur, panels.length, totalOnCanvas);
+	    }
+	    updatePanelStats(panelIndex, panel$$1, renderTime, ctx, size) {
+	        if (!perf.perfDebug())
+	            return;
+	        let renderStats = this.panelPerfStats.get(panel$$1);
+	        if (renderStats === undefined) {
+	            renderStats = new perf.RunningStatistics();
+	            this.panelPerfStats.set(panel$$1, renderStats);
+	        }
+	        renderStats.addValue(renderTime);
+	        const statW = 300;
+	        ctx.fillStyle = 'hsl(97, 100%, 96%)';
+	        ctx.fillRect(size.width - statW, size.height - 20, statW, 20);
+	        ctx.fillStyle = 'hsla(122, 77%, 22%)';
+	        const statStr = `Panel ${panelIndex + 1} | ` + perf.runningStatStr(renderStats);
+	        ctx.fillText(statStr, size.width - statW, size.height - 10);
+	    }
+	    updatePerfStats(renderTime, totalPanels, panelsOnCanvas) {
+	        if (!perf.perfDebug())
+	            return;
+	        this.perfStats.renderStats.addValue(renderTime);
+	        this.perfStats.totalPanels = totalPanels;
+	        this.perfStats.panelsOnCanvas = panelsOnCanvas;
+	    }
+	    renderPerfStats(index) {
+	        logging.assertTrue(perf.perfDebug());
+	        return [mithril('section', mithril('div', `Panel Container ${index + 1}`), mithril('div', `${this.perfStats.totalPanels} panels, ` +
+	                `${this.perfStats.panelsOnCanvas} on canvas.`), mithril('div', perf.runningStatStr(this.perfStats.renderStats)))];
 	    }
 	    getCanvasOverdrawHeightPerSide() {
 	        const overdrawHeight = (this.canvasOverdrawFactor - 1) * this.parentHeight;
@@ -11929,14 +12301,20 @@ var perfetto = (function () {
 	// TODO(hjd): We should remove the constant where possible.
 	// If any uses can't be removed we should read this constant from CSS.
 	exports.TRACK_SHELL_WIDTH = 300;
+	function isPinned(id) {
+	    return globals.globals.state.pinnedTracks.indexOf(id) !== -1;
+	}
 	const TrackShell = {
 	    view({ attrs }) {
-	        return mithril('.track-shell', mithril('h1', attrs.trackState.name), mithril(TrackMoveButton, {
-	            direction: 'up',
-	            trackId: attrs.trackState.id,
-	        }), mithril(TrackMoveButton, {
-	            direction: 'down',
-	            trackId: attrs.trackState.id,
+	        return mithril('.track-shell', mithril('h1', attrs.trackState.name), mithril(TrackButton, {
+	            action: actions.moveTrack(attrs.trackState.id, 'up'),
+	            i: 'arrow_upward_alt',
+	        }), mithril(TrackButton, {
+	            action: actions.moveTrack(attrs.trackState.id, 'down'),
+	            i: 'arrow_downward_alt',
+	        }), mithril(TrackButton, {
+	            action: actions.toggleTrackPinned(attrs.trackState.id),
+	            i: isPinned(attrs.trackState.id) ? 'star' : 'star_border',
 	        }));
 	    },
 	};
@@ -11962,11 +12340,11 @@ var perfetto = (function () {
 	        ]);
 	    }
 	};
-	const TrackMoveButton = {
+	const TrackButton = {
 	    view({ attrs }) {
-	        return mithril('i.material-icons.track-move-icons', {
-	            onclick: () => globals.globals.dispatch(actions.moveTrack(attrs.trackId, attrs.direction)),
-	        }, attrs.direction === 'up' ? 'arrow_upward_alt' : 'arrow_downward_alt');
+	        return mithril('i.material-icons.track-button', {
+	            onclick: () => globals.globals.dispatch(attrs.action),
+	        }, attrs.i);
 	    }
 	};
 	class TrackPanel extends panel.Panel {
@@ -11988,9 +12366,11 @@ var perfetto = (function () {
 	        return mithril(TrackComponent, { trackState: this.trackState, track: this.track });
 	    }
 	    renderCanvas(ctx, size) {
+	        ctx.save();
 	        ctx.translate(exports.TRACK_SHELL_WIDTH, 0);
 	        gridline_helper.drawGridLines(ctx, globals.globals.frontendLocalState.timeScale, globals.globals.frontendLocalState.visibleWindowTime, size.height);
 	        this.track.renderCanvas(ctx);
+	        ctx.restore();
 	    }
 	}
 	exports.TrackPanel = TrackPanel;
@@ -12165,11 +12545,11 @@ var perfetto = (function () {
 	        this.zoomContent.shutdown();
 	    },
 	    view() {
-	        const scrollingPanels = globals.globals.state.displayedTrackIds.length > 0 ?
+	        const scrollingPanels = globals.globals.state.scrollingTracks.length > 0 ?
 	            [
-	                mithril(header_panel.HeaderPanel, { title: 'Tracks' }),
-	                ...globals.globals.state.displayedTrackIds.map(id => mithril(track_panel_2.TrackPanel, { id })),
-	                mithril(flame_graph_panel.FlameGraphPanel),
+	                mithril(header_panel.HeaderPanel, { title: 'Tracks', key: 'tracksheader' }),
+	                ...globals.globals.state.scrollingTracks.map(id => mithril(track_panel_2.TrackPanel, { key: id, id })),
+	                mithril(flame_graph_panel.FlameGraphPanel, { key: 'flamegraph' }),
 	            ] :
 	            [];
 	        return mithril('.page', mithril(QueryTable), 
@@ -12177,8 +12557,9 @@ var perfetto = (function () {
 	        mithril('.pan-and-zoom-content', mithril('.pinned-panel-container', mithril(panel_container.PanelContainer, {
 	            doesScroll: false,
 	            panels: [
-	                mithril(overview_timeline_panel.OverviewTimelinePanel),
-	                mithril(time_axis_panel.TimeAxisPanel),
+	                mithril(overview_timeline_panel.OverviewTimelinePanel, { key: 'overview' }),
+	                mithril(time_axis_panel.TimeAxisPanel, { key: 'timeaxis' }),
+	                ...globals.globals.state.pinnedTracks.map(id => mithril(track_panel_2.TrackPanel, { key: id, id })),
 	            ],
 	        })), mithril('.scrolling-panel-container', mithril(panel_container.PanelContainer, {
 	            doesScroll: true,
@@ -12212,6 +12593,7 @@ var perfetto = (function () {
 	// See the License for the specific language governing permissions and
 	// limitations under the License.
 	Object.defineProperty(exports, "__esModule", { value: true });
+
 
 
 
@@ -12301,6 +12683,7 @@ var perfetto = (function () {
 	    const router$$1 = new router.Router('/', {
 	        '/': home_page.HomePage,
 	        '/viewer': viewer_page.ViewerPage,
+	        '/record': record_page.RecordPage,
 	    }, dispatch);
 	    remote.forwardRemoteCalls(channel.port2, new FrontendApi(router$$1));
 	    globals.globals.initialize(dispatch);
