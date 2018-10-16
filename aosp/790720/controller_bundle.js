@@ -452,20 +452,6 @@ var perfetto = (function () {
 	        const id = args.trackId;
 	        state$$1.tracks[id].dataReq = undefined;
 	    },
-	    // TODO(dproy): Reduce duplication with reqTrackData.
-	    reqTrackGroupData(state$$1, args) {
-	        const id = args.trackGroupId;
-	        state$$1.trackGroups[id].dataReq = {
-	            start: args.start,
-	            end: args.end,
-	            resolution: args.resolution
-	        };
-	    },
-	    // TODO(dproy): Reduce duplication with clearTrackDataReq.
-	    clearTrackGroupDataReq(state$$1, args) {
-	        const id = args.trackGroupId;
-	        state$$1.trackGroups[id].dataReq = undefined;
-	    },
 	    executeQuery(state$$1, args) {
 	        state$$1.queries[args.queryId] = {
 	            id: args.queryId,
