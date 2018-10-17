@@ -186,7 +186,8 @@ button.close {
 
 .pinned-panel-container {
   position: relative;
-  overflow: visible; }
+  overflow: visible;
+  border-bottom: 1px solid #262f3c; }
 
 .scroll-limiter {
   overflow: hidden;
@@ -277,28 +278,31 @@ span.code {
     .perf-stats .perf-stats-content table {
       border-collapse: collapse; }
 
-.process-panel {
+.track-group-panel {
+  --collapsed-background: hsla(190, 49%, 97%, 1);
+  --collapsed-transparent: hsla(190, 49%, 97%, 0);
+  --expanded-background: hsl(215, 22%, 19%);
   display: grid;
   grid-template-columns: auto 1fr;
   grid-template-rows: 1fr;
   border-top: 1px solid #c7d0db;
   transition: background-color .4s, color .4s; }
-  .process-panel[collapsed=true] {
+  .track-group-panel[collapsed=true] {
     height: 40px;
-    background-color: rgba(38, 47, 59, 0); }
-    .process-panel[collapsed=true] .shell {
+    background-color: var(--collapsed-background-transparent); }
+    .track-group-panel[collapsed=true] .shell {
       border-right: 1px solid #c7d0db;
-      background-color: #f4fafb; }
-  .process-panel[collapsed=false] {
+      background-color: var(--collapsed-background); }
+  .track-group-panel[collapsed=false] {
     height: 25px;
-    background-color: #262f3b;
+    background-color: var(--expanded-background);
     color: white;
     font-weight: bold; }
-    .process-panel[collapsed=false] .shell {
-      background-color: #262f3b; }
-      .process-panel[collapsed=false] .shell h1 {
+    .track-group-panel[collapsed=false] .shell {
+      background-color: var(--expanded-background); }
+      .track-group-panel[collapsed=false] .shell h1 {
         font-size: 15px; }
-  .process-panel .shell {
+  .track-group-panel .shell {
     padding: 0 20px;
     display: grid;
     grid-template-areas: "title fold-button";
@@ -307,15 +311,15 @@ span.code {
     line-height: 1;
     width: 300px;
     transition: background-color .4s; }
-    .process-panel .shell h1 {
+    .track-group-panel .shell h1 {
       grid-area: title;
       font-size: 1em;
       text-overflow: ellipsis;
       font-family: 'Google Sans'; }
-    .process-panel .shell .fold-button {
+    .track-group-panel .shell .fold-button {
       grid-area: fold-button;
       cursor: pointer; }
-      .process-panel .shell .fold-button:hover {
+      .track-group-panel .shell .fold-button:hover {
         color: #f5b800; }
 
 .sidebar {
@@ -567,13 +571,31 @@ span.code {
 
 .record-page {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: auto 1fr;
+  justify-content: space-evenly;
   grid-column-gap: 2rem;
   padding: 2rem;
   overflow-y: scroll; }
+  .record-page.three {
+    grid-template: "config command" min-content "config pbtxt" auto / auto auto; }
+    @media (min-width: 2000px) {
+      .record-page.three {
+        grid-template: "config command pbtxt" auto / auto auto auto; } }
+  .record-page.two {
+    grid-template: "config command" auto / auto auto; }
+  .record-page .config {
+    grid-area: config; }
+  .record-page .command {
+    grid-area: command; }
+  .record-page .pbtxt {
+    grid-area: pbtxt; }
   .record-page * {
     overflow: initial; }
+  .record-page i {
+    display: block;
+    padding: 0.5rem 0;
+    font-size: smaller; }
+  .record-page .heading {
+    padding-top: 0.75rem; }
   .record-page .control-group {
     margin-left: 2rem; }
   .record-page .text-column {
@@ -614,7 +636,7 @@ span.code {
   .record-page input {
     margin-right: 0.5rem; }
   .record-page label {
-    margin: 0.75rem 0;
+    margin-bottom: 0.75rem;
     overflow: visible; }
   .record-page label.range {
     display: grid;
@@ -637,12 +659,22 @@ span.code {
         font-size: 100%;
         width: 10ch;
         padding: 0; }
+    .record-page label.range * {
+      transition: opacity 0.3s ease, background-color 0.3s ease, width 0.3s ease, height 0.3s ease, max-width 0.3s ease, max-height 0.3s ease, margin 0.3s ease, border-radius 0.3s ease; }
+    .record-page label.range.disabled * {
+      opacity: 0; }
   .record-page label.multiselect {
     display: grid;
-    grid-template-areas: 'label input' 'selected selected';
-    grid-template-columns: 1fr auto;
+    grid-template-areas: 'label quick input' 'selected selected selected';
+    grid-template-columns: 1fr auto auto;
     grid-template-rows: auto auto;
     align-items: center; }
+    .record-page label.multiselect button {
+      font-size: smaller;
+      margin-right: 0.5rem;
+      padding: 3px;
+      border-radius: 4px;
+      background-color: #e3f2fd; }
     .record-page label.multiselect input {
       text-align: right;
       font-size: 100%;
@@ -655,7 +687,13 @@ span.code {
         margin-top: 0.5rem;
         padding: 3px;
         border-radius: 4px;
-        background-color: #e3f2fd; }
+        background-color: #fde3e3; }
+    .record-page label.multiselect * {
+      transition: opacity 0.3s ease, background-color 0.3s ease, width 0.3s ease, height 0.3s ease, max-width 0.3s ease, max-height 0.3s ease, margin 0.3s ease, border-radius 0.3s ease; }
+    .record-page label.multiselect.disabled * {
+      opacity: 0; }
+    .record-page label.multiselect.disabled .multiselect-selected button {
+      display: none; }
   .record-page label.checkbox {
     position: relative;
     user-select: none;
@@ -695,6 +733,6 @@ span.code {
         background: #27303d; }
     .record-page label.checkbox.disabled input {
       opacity: 0; }
-  .record-page label.disabled {
+  .record-page .disabled {
     color: grey;
     filter: grayscale(1); }

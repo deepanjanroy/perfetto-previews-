@@ -351,6 +351,8 @@ var perfetto = (function () {
 	function createEmptyRecordConfig() {
 	    return {
 	        durationSeconds: 10.0,
+	        writeIntoFile: false,
+	        fileWritePeriodMs: null,
 	        bufferSizeMb: 10.0,
 	        processMetadata: false,
 	        scanAllProcessesOnStart: false,
@@ -358,6 +360,16 @@ var perfetto = (function () {
 	        ftraceEvents: [],
 	        atraceApps: [],
 	        atraceCategories: [],
+	        ftraceDrainPeriodMs: null,
+	        ftraceBufferSizeKb: null,
+	        sysStats: false,
+	        meminfoPeriodMs: null,
+	        meminfoCounters: [],
+	        vmstatPeriodMs: null,
+	        vmstatCounters: [],
+	        statPeriodMs: null,
+	        statCounters: [],
+	        displayConfigAsPbtxt: false,
 	    };
 	}
 	exports.createEmptyRecordConfig = createEmptyRecordConfig;
@@ -550,18 +562,22 @@ var perfetto = (function () {
 	        // tslint:disable-next-line no-any
 	        const config = state$$1.recordConfig;
 	        const options = config[args.name];
-	        if (options.includes(args.option))
-	            return;
-	        options.push(args.option);
+	        for (const option of args.optionsToAdd) {
+	            if (options.includes(option))
+	                continue;
+	            options.push(option);
+	        }
 	    },
 	    removeConfigControl(state$$1, args) {
 	        // tslint:disable-next-line no-any
 	        const config = state$$1.recordConfig;
 	        const options = config[args.name];
-	        const index = options.indexOf(args.option);
-	        if (index === -1)
-	            return;
-	        options.splice(index, 1);
+	        for (const option of args.optionsToRemove) {
+	            const index = options.indexOf(option);
+	            if (index === -1)
+	                continue;
+	            options.splice(index, 1);
+	        }
 	    },
 	};
 	// Actions is an implementation of DeferredActions<typeof StateActions>.
@@ -10619,16 +10635,20 @@ var perfetto = (function () {
 	// limitations under the License.
 	Object.defineProperty(exports, "__esModule", { value: true });
 
-	// Aliases protos to avoid the super nested namespaces.
-	// See https://www.typescriptlang.org/docs/handbook/namespaces.html#aliases
-	var TraceConfig = protos.perfetto.protos.TraceConfig;
-	exports.TraceConfig = TraceConfig;
-	var TraceProcessor = protos.perfetto.protos.TraceProcessor;
-	exports.TraceProcessor = TraceProcessor;
+	var MeminfoCounters = protos.perfetto.protos.MeminfoCounters;
+	exports.MeminfoCounters = MeminfoCounters;
 	var RawQueryArgs = protos.perfetto.protos.RawQueryArgs;
 	exports.RawQueryArgs = RawQueryArgs;
 	var RawQueryResult = protos.perfetto.protos.RawQueryResult;
 	exports.RawQueryResult = RawQueryResult;
+	var StatCounters = protos.perfetto.protos.SysStatsConfig.StatCounters;
+	exports.StatCounters = StatCounters;
+	var TraceConfig = protos.perfetto.protos.TraceConfig;
+	exports.TraceConfig = TraceConfig;
+	var TraceProcessor = protos.perfetto.protos.TraceProcessor;
+	exports.TraceProcessor = TraceProcessor;
+	var VmstatCounters = protos.perfetto.protos.VmstatCounters;
+	exports.VmstatCounters = VmstatCounters;
 	function getCell(result, column, row) {
 	    const values = result.columns[column];
 	    switch (result.columnDescriptors[column].type) {
@@ -10661,12 +10681,15 @@ var perfetto = (function () {
 	});
 
 	unwrapExports(protos_1);
-	var protos_2 = protos_1.TraceConfig;
-	var protos_3 = protos_1.TraceProcessor;
-	var protos_4 = protos_1.RawQueryArgs;
-	var protos_5 = protos_1.RawQueryResult;
-	var protos_6 = protos_1.rawQueryResultColumns;
-	var protos_7 = protos_1.rawQueryResultIter;
+	var protos_2 = protos_1.MeminfoCounters;
+	var protos_3 = protos_1.RawQueryArgs;
+	var protos_4 = protos_1.RawQueryResult;
+	var protos_5 = protos_1.StatCounters;
+	var protos_6 = protos_1.TraceConfig;
+	var protos_7 = protos_1.TraceProcessor;
+	var protos_8 = protos_1.VmstatCounters;
+	var protos_9 = protos_1.rawQueryResultColumns;
+	var protos_10 = protos_1.rawQueryResultIter;
 
 	var engine = createCommonjsModule(function (module, exports) {
 	// Copyright (C) 2018 The Android Open Source Project
@@ -11030,6 +11053,16 @@ var perfetto = (function () {
 	    }
 	    publish(data) {
 	        globals.globals.publish('TrackData', { id: this.trackId, data });
+	    }
+	    /**
+	     * Returns a valid SQL table name with the given prefix that should be unique for each
+	     * track.
+	     */
+	    tableName(prefix) {
+	        // Derive table name from, since that is unique for each track.
+	        // Track ID can be UUID but '-' is not valid for sql table name.
+	        const idSuffix = this.trackId.split('-').join('_');
+	        return `${prefix}_${idSuffix}`;
 	    }
 	    run() {
 	        const dataReq = this.trackState.dataReq;
@@ -11491,11 +11524,6 @@ var perfetto = (function () {
 	    onBoundsChange(start, end, resolution) {
 	        this.update(start, end, resolution);
 	    }
-	    // Returns a track id representation valid for use in sql table names.
-	    get sqlTrackId() {
-	        // Track ID can be UUID but '-' is not valid for sql table name.
-	        return this.trackId.split('-').join('_');
-	    }
 	    update(start, end, resolution) {
 	        return tslib_es6.__awaiter(this, void 0, void 0, function* () {
 	            // TODO: we should really call TraceProcessor.Interrupt() at this point.
@@ -11505,25 +11533,25 @@ var perfetto = (function () {
 	            const startNs = Math.round(start * 1e9);
 	            const endNs = Math.round(end * 1e9);
 	            if (this.setup === false) {
-	                yield this.query(`create virtual table window_${this.sqlTrackId} using window;`);
+	                yield this.query(`create virtual table ${this.tableName('window')} using window;`);
 	                const threadQuery = yield this.query(`select utid from thread where upid=${this.config.upid}`);
 	                const utids = threadQuery.columns[0].longValues;
-	                const processSliceView = `process_slice_view_${this.sqlTrackId}`;
+	                const processSliceView = this.tableName('process_slice_view');
 	                yield this.query(`create view ${processSliceView} as ` +
 	                    // 0 as cpu is a dummy column to perform span join on.
 	                    `select ts, dur/${utids.length} as dur, 0 as cpu ` +
 	                    `from slices where depth = 0 and utid in ` +
 	                    // TODO(dproy): This query is faster if we write it as x < utid < y.
 	                    `(${utids.join(',')})`);
-	                yield this.query(`create virtual table span_${this.sqlTrackId}
-                     using span(${processSliceView}, window_${this.sqlTrackId}, cpu);`);
+	                yield this.query(`create virtual table ${this.tableName('span')}
+                     using span(${processSliceView}, ${this.tableName('window')}, cpu);`);
 	                this.setup = true;
 	            }
 	            // |resolution| is in s/px we want # ns for 10px window:
 	            const bucketSizeNs = Math.round(resolution * 10 * 1e9);
 	            const windowStartNs = Math.floor(startNs / bucketSizeNs) * bucketSizeNs;
 	            const windowDurNs = endNs - windowStartNs;
-	            this.query(`update window_${this.sqlTrackId} set
+	            this.query(`update ${this.tableName('window')} set
       window_start=${windowStartNs},
       window_dur=${windowDurNs},
       quantum=${bucketSizeNs}
@@ -11538,13 +11566,12 @@ var perfetto = (function () {
 	            const endNs = Math.round(end * 1e9);
 	            const numBuckets = Math.ceil((endNs - startNs) / bucketSizeNs);
 	            const query = `select
-        quantum_ts as bucket,
-        sum(dur)/cast(${bucketSizeNs} as float) as utilization
-        from span_${this.sqlTrackId}
-        group by quantum_ts`;
-	            const before = performance.now();
+      quantum_ts as bucket,
+      sum(dur)/cast(${bucketSizeNs} as float) as utilization
+      from ${this.tableName('span')}
+      where cpu = 0
+      group by quantum_ts`;
 	            const rawResult = yield this.query(query);
-	            console.log('UTIL computeSUmmary took ', performance.now() - before);
 	            const numRows = +rawResult.numRecords;
 	            const summary = {
 	                start,
@@ -11564,7 +11591,6 @@ var perfetto = (function () {
 	    // TODO(dproy); Dedup with other controllers.
 	    query(query) {
 	        return tslib_es6.__awaiter(this, void 0, void 0, function* () {
-	            console.log('GROUP QUERY: ', query);
 	            const result = yield this.engine.query(query);
 	            if (result.error) {
 	                console.error(`Query error "${query}": ${result.error}`);
@@ -11574,10 +11600,9 @@ var perfetto = (function () {
 	        });
 	    }
 	    onDestroy() {
-	        console.log('Process summary being destroyed!');
 	        if (this.setup) {
-	            this.query(`drop table window_${this.sqlTrackId}`);
-	            this.query(`drop table span_${this.sqlTrackId}`);
+	            this.query(`drop table ${this.tableName('window')}`);
+	            this.query(`drop table ${this.tableName('span')}`);
 	            this.setup = false;
 	        }
 	    }
@@ -11815,6 +11840,7 @@ var perfetto = (function () {
 
 
 
+
 	exports.BUCKET_NAME = 'perfetto-ui-data';
 	class PermalinkController extends controller.Controller {
 	    constructor() {
@@ -11842,17 +11868,25 @@ var perfetto = (function () {
 	    }
 	    static createPermalink() {
 	        return tslib_es6.__awaiter(this, void 0, void 0, function* () {
-	            const state = Object.assign({}, globals.globals.state);
-	            state.engines = Object.assign({}, state.engines);
+	            const state = globals.globals.state;
+	            // Upload each loaded trace.
+	            const fileToUrl = new Map();
 	            for (const engine of Object.values(state.engines)) {
-	                // If the trace was opened from a local file, upload it and store the
-	                // url of the uploaded trace instead.
-	                if (engine.source instanceof File) {
-	                    const url = yield this.saveTrace(engine.source);
-	                    engine.source = url;
-	                }
+	                if (!(engine.source instanceof File))
+	                    continue;
+	                const url = yield this.saveTrace(engine.source);
+	                fileToUrl.set(engine.source, url);
 	            }
-	            const hash = yield this.saveState(state);
+	            // Convert state to use URLs.
+	            const uploadState = immer_1(state, draft => {
+	                for (const engine of Object.values(draft.engines)) {
+	                    if (!(engine.source instanceof File))
+	                        continue;
+	                    engine.source = fileToUrl.get(engine.source);
+	                }
+	            });
+	            // Upload state.
+	            const hash = yield this.saveState(uploadState);
 	            return hash;
 	        });
 	    }
@@ -11938,6 +11972,7 @@ var perfetto = (function () {
 	// limitations under the License.
 	Object.defineProperty(exports, "__esModule", { value: true });
 
+	const protos_2 = protos_1;
 
 	function uint8ArrayToBase64(buffer) {
 	    return btoa(String.fromCharCode.apply(null, buffer));
@@ -11948,6 +11983,8 @@ var perfetto = (function () {
 	    const durationMs = config.durationSeconds * 1000;
 	    const dataSources = [];
 	    if (config.ftrace) {
+	        const drainPeriodMs = config.ftraceDrainPeriodMs ? config.ftraceDrainPeriodMs : null;
+	        const bufferSizeKb = config.ftraceBufferSizeKb ? config.ftraceBufferSizeKb : null;
 	        dataSources.push({
 	            config: {
 	                name: 'linux.ftrace',
@@ -11956,6 +11993,8 @@ var perfetto = (function () {
 	                    ftraceEvents: config.ftraceEvents,
 	                    atraceApps: config.atraceApps,
 	                    atraceCategories: config.atraceCategories,
+	                    drainPeriodMs,
+	                    bufferSizeKb,
 	                },
 	            },
 	        });
@@ -11971,24 +12010,66 @@ var perfetto = (function () {
 	            },
 	        });
 	    }
-	    const buffer = protos_1.TraceConfig
-	        .encode({
+	    if (config.sysStats) {
+	        const sysStatsConfig = {};
+	        if (config.meminfoPeriodMs) {
+	            sysStatsConfig.meminfoPeriodMs = config.meminfoPeriodMs;
+	            sysStatsConfig.meminfoCounters = config.meminfoCounters.map(name => {
+	                // tslint:disable-next-line no-any
+	                return protos_2.MeminfoCounters[name];
+	            });
+	        }
+	        if (config.vmstatPeriodMs) {
+	            sysStatsConfig.vmstatPeriodMs = config.vmstatPeriodMs;
+	            sysStatsConfig.vmstatCounters = config.vmstatCounters.map(name => {
+	                // tslint:disable-next-line no-any
+	                return protos_2.VmstatCounters[name];
+	            });
+	        }
+	        if (config.statPeriodMs) {
+	            sysStatsConfig.statPeriodMs = config.statPeriodMs;
+	            sysStatsConfig.statCounters = config.statCounters.map(name => {
+	                // tslint:disable-next-line no-any
+	                return protos_2.StatCounters[name];
+	            });
+	        }
+	        dataSources.push({
+	            config: {
+	                name: 'linux.sys_stats',
+	                sysStatsConfig,
+	            },
+	        });
+	    }
+	    const proto = {
+	        durationMs,
 	        buffers: [
 	            {
 	                sizeKb,
 	            },
 	        ],
 	        dataSources,
-	        durationMs,
-	    })
-	        .finish();
+	    };
+	    if (config.writeIntoFile) {
+	        proto.writeIntoFile = true;
+	        if (config.fileWritePeriodMs) {
+	            proto.fileWritePeriodMs = config.fileWritePeriodMs;
+	        }
+	    }
+	    const buffer = protos_1.TraceConfig.encode(proto).finish();
 	    return buffer;
 	}
 	exports.encodeConfig = encodeConfig;
 	function toPbtxt(configBuffer) {
-	    const json = protos_1.TraceConfig.decode(configBuffer).toJSON();
+	    const msg = protos_1.TraceConfig.decode(configBuffer);
+	    const json = msg.toJSON();
 	    function snakeCase(s) {
 	        return s.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
+	    }
+	    // With the ahead of time compiled protos we can't seem to tell which
+	    // fields are enums.
+	    function looksLikeEnum(value) {
+	        return value.startsWith('MEMINFO_') || value.startsWith('VMSTAT_') ||
+	            value.startsWith('STAT_');
 	    }
 	    function* message(msg, indent) {
 	        for (const [key, value] of Object.entries(msg)) {
@@ -11997,7 +12078,7 @@ var perfetto = (function () {
 	            for (const entry of (isRepeated ? value : [value])) {
 	                yield ' '.repeat(indent) + `${snakeCase(key)}${isNested ? '' : ':'} `;
 	                if (typeof entry === 'string') {
-	                    yield `"${entry}"`;
+	                    yield looksLikeEnum(entry) ? entry : `"${entry}"`;
 	                }
 	                else if (typeof entry === 'number') {
 	                    yield entry.toString();
@@ -12139,8 +12220,6 @@ var perfetto = (function () {
 
 	var trace_controller = createCommonjsModule(function (module, exports) {
 	// Copyright (C) 2018 The Android Open Source Project
-	Object.defineProperty(exports, "__esModule", { value: true });
-
 	//
 	// Licensed under the Apache License, Version 2.0 (the "License");
 	// you may not use this file except in compliance with the License.
@@ -12153,6 +12232,8 @@ var perfetto = (function () {
 	// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 	// See the License for the specific language governing permissions and
 	// limitations under the License.
+	Object.defineProperty(exports, "__esModule", { value: true });
+
 
 
 
@@ -12294,7 +12375,13 @@ var perfetto = (function () {
 	                actions$$1.push(actions.Actions.setVisibleTraceTime(traceTimeState));
 	            }
 	            globals.globals.dispatchMultiple(actions$$1);
-	            yield this.listTracks();
+	            {
+	                // When we reload from a permalink don't create extra tracks:
+	                const { pinnedTracks, scrollingTracks } = globals.globals.state;
+	                if (!pinnedTracks.length && !scrollingTracks.length) {
+	                    yield this.listTracks();
+	                }
+	            }
 	            yield this.listThreads();
 	            yield this.loadTimelineOverview(traceTime);
 	        });
@@ -12371,7 +12458,7 @@ var perfetto = (function () {
 	                    }));
 	                    addTrackGroupActions.push(actions.Actions.addTrackGroup({
 	                        engineId: this.engineId,
-	                        summaryTrack: summaryTrackId,
+	                        summaryTrackId: summaryTrackId,
 	                        name: `${processName} ${pid}`,
 	                        id: pUuid,
 	                        collapsed: true,
